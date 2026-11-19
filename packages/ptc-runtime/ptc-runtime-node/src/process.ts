@@ -35,7 +35,7 @@ interface Evaluation {
  * @param maxMessageBytes - Maximum control message and queued output bytes.
  * @param processState - Native child process; structural test doubles do not replace Node's globals or built-in exports.
  * @param defaultFormat - Syntax used by installed bootstraps when the host omits it.
- * @param importHandler - Runner-local import decisions; omission retains native loading.
+ * @param importHandler - Node-only runner-local import decisions; omission retains native loading.
  * @returns After control closure and evaluator cleanup.
  */
 export async function runNodeMain(
@@ -43,6 +43,9 @@ export async function runNodeMain(
   importHandler?: ProgramImportHandler,
 ): Promise<void> {
   if (!Number.isSafeInteger(maxMessageBytes) || maxMessageBytes <= 0) throw new Error('invalid control message limit')
+  if (importHandler !== undefined && process.versions.bun !== undefined) {
+    throw new Error('PTC runner-local import handlers require Node')
+  }
   clearProgramEnvironment(processState)
   const context = new AsyncLocalStorage<Evaluation>()
   const closed = Promise.withResolvers<void>()

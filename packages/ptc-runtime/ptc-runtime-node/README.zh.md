@@ -57,7 +57,7 @@ kind: "package-reference"
 | `maxPendingCalls` | `128` | 同时进行的 Host 绑定调用数量上限 |
 | `stopGraceMs` | `3,000` | 终止进程前等待协作式停止确认的时间 |
 | `graceMs` | `3,000` | 受管终止与输出排空宽限时间 |
-| `launch` | 本地载体 | 子进程环境中显式的 `{ kind: "node-script", executable, bootstrapPath? }` 或 `{ kind: "embedded", executable }` |
+| `launch` | 本地载体 | 子进程环境中显式的 `node-script`、`bun-script` 或 `embedded` 启动方式 |
 
 [配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-ptc-runtime-node)定义可接受的配置字段。`resolve(request)` 将 cwd 默认设为沙箱策略的工作区根目录，并补全数值或 null 截止选择与执行策略；`run(spec)` 接受这些已解析输入，不补缺省值。
 
@@ -137,7 +137,9 @@ Host 通过有序控制管道上的 birpc 调用子进程的 `run()`。同一时
 
 ### 源代码与构建后 bootstrap
 
-源代码执行加载仅含可擦除语法的 bootstrap 依赖，不依赖同级包的构建后导出；执行世界中必须提供求值器模块和已安装的 Acorn 与 birpc 依赖。构建后脚本对所有模式使用 `process.js`；`persistent-process.js` 委托同一个循环，并为未指定程序语法的宿主提供 REPL 默认值。内嵌载体通过 `launch.executable` 启动私有 worker，并在每次执行中携带程序格式和保留标志。远端脚本部署提供对应的 `launch.bootstrapPath`。`resolveLaunch()` 在构造时选择本地默认值；显式的远端调用不依赖客户端自身是否打包。不会假设 Host 路径对应同一个远程文件。Bun Web Host 使用 `launch.executable` 或 `DSP_NODE_EXECUTABLE` 提供的 Node 可执行文件绝对路径完成类型擦除和程序执行。
+源代码执行加载仅含可擦除语法的 bootstrap 依赖，不依赖同级包的构建后导出；执行世界中必须提供求值器模块和已安装的 Acorn 与 birpc 依赖。构建后脚本对所有模式使用 `process.js`；`persistent-process.js` 委托同一个循环，并为未指定程序语法的宿主提供 REPL 默认值。内嵌载体通过 `launch.executable` 启动私有 worker，并在每次执行中携带程序格式和保留标志。远端脚本部署提供对应的 `launch.bootstrapPath`。`resolveLaunch()` 在构造时选择本地默认值；显式的远端调用不依赖客户端自身是否打包。不会假设 Host 路径对应同一个远程文件。
+
+在 macOS 上，显式选择的 `bun-script` 子进程用 Bun 运行同一套 bootstrap 和控制协议。Bun Host 选择 `node-script` 时使用其 Node 可执行文件绝对路径做类型擦除，选择 `bun-script` 时使用 `DSP_NODE_EXECUTABLE` 中的 Node 绝对路径。Bun 子进程会清空启动环境，并在启动时忽略工作区的 Bun 配置、TS 配置和 dotenv 文件。默认搜索路径之外的嵌套可执行文件须使用绝对路径。执行进程专用的导入钩子和 V8 堆上限适用于 Node 子进程。
 
 包含 `await` 的源码会在原生编译前检查顶层 await，否则原生编译可能将 `await` 当作标识符。Acorn 解析包住源码的异步函数，acorn-walk 沿用 Node REPL 的 visitor、声明提升和按字符位置修改源码的方式进行遍历。类方法的计算属性名参与遍历，方法体仍独立求值。转换包装末尾表达式，求值器解包并等待其值。无需转换的源码使用原生编译；不含 `await` 的提交保留原生语法诊断。语法错误保留解析器消息、可用的源码位置与光标，不包含编译器或转换器的调用帧。动态 `import()` 表达式保持原生形式，使用编译该 Script 时的 `importModuleDynamically` 选项。两个私有进程 bundle 都包含 Acorn、acorn-walk 和 birpc；源码执行导入已安装的包。
 

@@ -134,11 +134,13 @@ function resolveTypeStripper(config: ResolvedConfig): (program: string) => strin
   if (typeof nodeModule.stripTypeScriptTypes === 'function') return nodeModule.stripTypeScriptTypes
 
   const launch = config.launch
-  if (launch.kind !== 'node-script' || !isAbsolute(launch.executable)) {
+  const nodeExecutable = launch.kind === 'bun-script' ? process.env.DSP_NODE_EXECUTABLE
+    : launch.kind === 'node-script' ? launch.executable : undefined
+  if (nodeExecutable === undefined || !isAbsolute(nodeExecutable)) {
     throw new Error('ptc-runtime-node: this Host requires an absolute Node executable for TypeScript stripping')
   }
   return (program) => {
-    const result = spawnSync(launch.executable, ['-e', [
+    const result = spawnSync(nodeExecutable, ['-e', [
       "const { readFileSync } = require('node:fs')",
       "const { stripTypeScriptTypes } = require('node:module')",
       'process.stdout.write(stripTypeScriptTypes(readFileSync(0, "utf8")))',
@@ -156,11 +158,12 @@ function resolveTypeStripper(config: ResolvedConfig): (program: string) => strin
 
 function resolveMode(config: ResolvedConfig): ExecutionMode {
   const stripTypeScriptTypes = resolveTypeStripper(config)
+  const freshProcess = config.launch.kind === 'bun-script' ? 'Each call runs in a fresh Bun process.' : 'Each call runs in a fresh Node process.'
   switch (config.executionMode) {
     case 'per-call': return {
       format: 'function-body',
       retainsState: false,
-      executionInstructions: 'The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. Emit output with console.log(...) or return a lossless JSON value. Only printed values and the returned value become program output. Each call runs in a fresh Node process. Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution\'s sandbox policy.',
+      executionInstructions: 'The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. Emit output with console.log(...) or return a lossless JSON value. Only printed values and the returned value become program output. ' + freshProcess + ' Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution\'s sandbox policy.',
       stripTypes(program) {
         const stripped = stripTypeScriptTypes(STRIP_PREFIX + program + STRIP_SUFFIX)
         return stripped.slice(STRIP_PREFIX.length, stripped.length - STRIP_SUFFIX.length)
@@ -175,7 +178,7 @@ function resolveMode(config: ResolvedConfig): ExecutionMode {
     case 'vm-script': {
       const lifetime = config.scriptPersistence
         ? 'Variables, functions, and imported modules remain in memory for this Agent across calls.'
-        : 'Each call runs in a fresh Node process.'
+        : freshProcess
       const filePolicy = config.scriptPersistence
         ? 'Direct filesystem access follows the environment\'s launch-time sandbox policy; process.env starts empty.'
         : 'Direct filesystem access follows this execution\'s sandbox policy; process.env starts empty.'

@@ -6,8 +6,8 @@ import { assertNever } from '@deepseek-ai/dsh-util-values'
 
 /** Deployment-owned worker invocation in the subprocess execution world. */
 export type LaunchConfig = {
-  /** Start a separately installed Node executable and JavaScript bootstrap. */
-  kind: 'node-script'
+  /** Start the JavaScript bootstrap with an explicitly selected runtime. */
+  kind: 'node-script' | 'bun-script'
   /** Executable name or path resolved by the subprocess provider. */
   executable: string
   /** Absolute preinstalled bootstrap; omitted maps this package's bootstrap into the execution world. */
@@ -30,7 +30,10 @@ export function resolveLaunch(config?: LaunchConfig): LaunchConfig {
   if (executable === undefined) throw new Error('ptc-runtime-node: Bun Web Host requires DSP_NODE_EXECUTABLE')
   const launch: LaunchConfig = config ?? { kind: 'pkg' in process ? 'embedded' : 'node-script', executable }
   if (launch.executable.length === 0) throw new Error('ptc-runtime-node: launch.executable must be non-empty')
-  if (launch.kind === 'node-script' && launch.bootstrapPath !== undefined && !isAbsolute(launch.bootstrapPath)) {
+  if (launch.kind === 'bun-script' && process.platform !== 'darwin') {
+    throw new Error('ptc-runtime-node: bun-script requires a macOS host')
+  }
+  if (launch.kind !== 'embedded' && launch.bootstrapPath !== undefined && !isAbsolute(launch.bootstrapPath)) {
     throw new Error('ptc-runtime-node: launch.bootstrapPath must be absolute')
   }
   return launch
@@ -41,13 +44,17 @@ export function resolveLaunch(config?: LaunchConfig): LaunchConfig {
  * @param fs - Filesystem mapping host bootstrap assets into the process world.
  * @param config - resolved worker invocation.
  * @param maxMessageBytes - Validated frame and queued-write limit.
- * @returns Arguments following the resolved Node executable.
+ * @returns Arguments following the resolved worker executable.
  */
 export function bootstrapArgs(fs: Pick<FileSystem, 'processPathFromHostPath'>, config: LaunchConfig, maxMessageBytes: number): string[] {
   switch (config.kind) {
     case 'embedded':
       return [String(maxMessageBytes)]
     case 'node-script': return ['--experimental-vm-modules', ...scriptBootstrapArgs(fs, config.bootstrapPath, maxMessageBytes)]
+    case 'bun-script':
+      // Bun must start the bootstrap before running any workspace code.
+      return ['--config=/dev/null', '--tsconfig-override=/dev/null', '--no-env-file', '--no-install',
+        ...scriptBootstrapArgs(fs, config.bootstrapPath, maxMessageBytes)]
     /* v8 ignore next -- Callers supply the resolved, closed LaunchConfig union. */
     default: return assertNever(config)
   }

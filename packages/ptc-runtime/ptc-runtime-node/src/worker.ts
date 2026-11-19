@@ -273,7 +273,8 @@ export class ProgramWorker {
   }
 
   private exitMessage(outcome: SubprocessOutcome): string {
-    return this.withControlFailure(`Node process exited (${String(outcome.exitCode)}, signal ${String(outcome.signal)})${this.stderr ? `: ${this.stderr}` : ''}`)
+    const runtime = this.config.launch.kind === 'bun-script' ? 'Bun' : 'Node'
+    return this.withControlFailure(`${runtime} process exited (${String(outcome.exitCode)}, signal ${String(outcome.signal)})${this.stderr ? `: ${this.stderr}` : ''}`)
   }
 
   private async start(cwd: string): Promise<void> {
@@ -281,7 +282,8 @@ export class ProgramWorker {
     if (this.closed) return
     const packaged = this.config.launch.kind === 'embedded'
     const heapFlag = `--max-old-space-size=${this.config.maxOldGenerationSizeMb}`
-    const argv = [executable, ...packaged ? [] : [heapFlag],
+    const nodeScript = this.config.launch.kind === 'node-script'
+    const argv = [executable, ...nodeScript ? [heapFlag] : [],
       ...bootstrapArgs(this.ctx.fs, this.config.launch, this.config.maxMessageBytes)]
     const policy = this.policy
     this.confined = policy.mode === 'danger-full-access' ? undefined : await this.ctx.sandbox.confine(argv, { ...policy, mode: policy.mode }, this.controller.signal)

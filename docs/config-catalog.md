@@ -2912,8 +2912,8 @@ export interface Config {
 
 /** Deployment-owned worker invocation in the subprocess execution world. */
 export type LaunchConfig = {
-  /** Start a separately installed Node executable and JavaScript bootstrap. */
-  kind: 'node-script'
+  /** Start the JavaScript bootstrap with an explicitly selected runtime. */
+  kind: 'node-script' | 'bun-script'
   /** Executable name or path resolved by the subprocess provider. */
   executable: string
   /** Absolute preinstalled bootstrap; omitted maps this package's bootstrap into the execution world. */

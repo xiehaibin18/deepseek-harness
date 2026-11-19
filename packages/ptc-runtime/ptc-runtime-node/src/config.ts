@@ -45,6 +45,7 @@ export const NodeConfig: z<Config> = z.object({
   graceMs: z.number().default(3_000),
   launch: z.union([
     z.object({ kind: z.const('node-script').required(), executable: z.string().required(), bootstrapPath: z.string() }),
+    z.object({ kind: z.const('bun-script').required(), executable: z.string().required(), bootstrapPath: z.string() }),
     z.object({ kind: z.const('embedded').required(), executable: z.string().required() }),
   ]),
 })
