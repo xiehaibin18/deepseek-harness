@@ -25,7 +25,10 @@ export type LaunchConfig = {
  * @returns the worker invocation without guessing from the execution world's paths.
  */
 export function resolveLaunch(config?: LaunchConfig): LaunchConfig {
-  const launch: LaunchConfig = config ?? { kind: 'pkg' in process ? 'embedded' : 'node-script', executable: process.execPath }
+  const executable = config?.executable
+    ?? (process.versions.bun === undefined ? process.execPath : process.env.DSP_NODE_EXECUTABLE)
+  if (executable === undefined) throw new Error('ptc-runtime-node: Bun Web Host requires DSP_NODE_EXECUTABLE')
+  const launch: LaunchConfig = config ?? { kind: 'pkg' in process ? 'embedded' : 'node-script', executable }
   if (launch.executable.length === 0) throw new Error('ptc-runtime-node: launch.executable must be non-empty')
   if (launch.kind === 'node-script' && launch.bootstrapPath !== undefined && !isAbsolute(launch.bootstrapPath)) {
     throw new Error('ptc-runtime-node: launch.bootstrapPath must be absolute')

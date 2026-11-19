@@ -228,7 +228,7 @@ class Hmr extends Service {
   public baseDir: string
 
   private readonly ownerContext: Context
-  private internal: ModuleLoader
+  private readonly internal: ModuleLoader | undefined
   private watcher: FSWatcher | undefined
 
   /**
@@ -307,10 +307,10 @@ class Hmr extends Service {
   constructor(ctx: Context, public config: HmrConfig) {
     super(ctx, 'hmr')
     this.ownerContext = ctx
-    if (!this.ctx.loader.internal) {
-      throw new Error('--expose-internals is required for HMR service')
-    }
     this.internal = this.ctx.loader.internal
+    if (this.internal === undefined && (process.versions.bun === undefined || config.root.length !== 0)) {
+      throw new Error('--expose-internals is required for module HMR')
+    }
     this.baseDir = fileURLToPath(new URL(config.base || '.', ctx.baseUrl))
   }
 
@@ -319,23 +319,26 @@ class Hmr extends Service {
    * retains this cache even when asynchronous module hooks run in a separate thread.
    */
   private esmJob(url: string): ModuleJob | undefined {
-    return this.hasEsmCache() ? this.internal.loadCache.get(url) : undefined
+    return this.hasEsmCache() ? this.internal?.loadCache.get(url) : undefined
   }
 
   /** Whether this thread keeps a Node ES module cache; the packed worker loader keeps none. */
   private hasEsmCache(): boolean {
+    if (this.internal === undefined) return false
     const cache: unknown = Reflect.get(this.internal, 'loadCache')
     return cache !== undefined
   }
 
   /** Whether the ES module cache holds a job for a URL; `false` when this thread keeps no ES module cache. */
   private esmHas(url: string, type?: string): boolean {
-    return this.hasEsmCache() && (type === undefined ? this.internal.loadCache.has(url) : this.internal.loadCache.has(url, type))
+    return this.internal !== undefined && this.hasEsmCache()
+      && (type === undefined ? this.internal.loadCache.has(url) : this.internal.loadCache.has(url, type))
   }
 
   /** ES module cache keys, empty when this thread keeps no ES module cache. */
   private esmUrls(): string[] {
-    return this.hasEsmCache() ? [...Map.prototype.keys.call(this.internal.loadCache) as Iterable<string>] : []
+    return this.internal !== undefined && this.hasEsmCache()
+      ? [...Map.prototype.keys.call(this.internal.loadCache) as Iterable<string>] : []
   }
 
   /** ES module cache keys and CommonJS cache filenames as URLs. */
@@ -406,6 +409,8 @@ class Hmr extends Service {
       for (const filename of patchFiles) await this.watchConfig(filename, () => refresh(false))
       await this.watchConfig(manifestPath, () => refresh(true))
     }
+
+    if (this.internal === undefined) return
 
     const { loader } = this.ctx
     const { root, ignored } = this.config
@@ -581,11 +586,13 @@ class Hmr extends Service {
   }
 
   private async partialReload() {
+    const internal = this.internal
+    if (internal === undefined) throw new Error('Module reload requires the Node module cache')
     await this.analyzeChanges()
 
     const pending = new Map<ModuleJob, Plugin>()
     const reloads = new Map<Plugin, Reload>()
-    const moduleUrls = EntryNamespaces.getModuleUrls(this.internal)
+    const moduleUrls = EntryNamespaces.getModuleUrls(internal)
 
     // Build a map of plugin names per config tree URL.
     // Plugin entry files are treated as atomic reload units.
@@ -593,7 +600,7 @@ class Hmr extends Service {
     for (const entry of this.ctx.loader.entries()) {
       const baseUrl = entry.parent.tree.ctx.baseUrl
       if (baseUrl === undefined) throw new Error('HMR entry tree has no base URL')
-      const names = nameMap.get(baseUrl) ?? new EntryNamespaces(this.internal, moduleUrls)
+      const names = nameMap.get(baseUrl) ?? new EntryNamespaces(internal, moduleUrls)
       names.add(entry.options.name, entry.moduleNamespace)
       nameMap.set(baseUrl, names)
     }
@@ -762,10 +769,11 @@ class Hmr extends Service {
     const list = [...urls]
     // CommonJS-only files have no loadCache entry to restore.
     const cached = new Set(this.esmUrls())
+    const loadCache = this.internal?.loadCache
     for (const url of list) {
-      if (cached.has(url)) {
-        esmBackup.set(url, Map.prototype.get.call(this.internal.loadCache, url))
-        Map.prototype.delete.call(this.internal.loadCache, url)
+      if (loadCache !== undefined && cached.has(url)) {
+        esmBackup.set(url, Map.prototype.get.call(loadCache, url))
+        Map.prototype.delete.call(loadCache, url)
       }
     }
     for (const filepath of list.filter(url => url.startsWith('file:')).map(url => fileURLToPath(url))) {
@@ -776,7 +784,9 @@ class Hmr extends Service {
       }
     }
     return () => {
-      for (const [url, job] of esmBackup) Map.prototype.set.call(this.internal.loadCache, url, job)
+      if (loadCache !== undefined) {
+        for (const [url, job] of esmBackup) Map.prototype.set.call(loadCache, url, job)
+      }
       for (const [filepath, module] of cjsBackup) cache[filepath] = module
     }
   }
@@ -796,7 +806,8 @@ class Hmr extends Service {
     const add = (parent: string, child: string) => {
       importers.set(child, (importers.get(child) ?? new Set()).add(parent))
     }
-    await Promise.all([...moduleJobs(this.internal)].map(async (job) => {
+    const jobs = this.internal === undefined ? [] : [...moduleJobs(this.internal)]
+    await Promise.all(jobs.map(async (job) => {
       for (const child of await linkedJobs(job)) add(job.url, child.url)
     }))
     for (const [filename, module] of Object.entries(commonJsCache())) {
@@ -933,6 +944,11 @@ class Hmr extends Service {
     if (profile === undefined) throw new Error('HMR profile reconciliation requires profileContext')
     // Entries this recomposition stops start again, and fail it when they cannot.
     const running = [...this.ctx.loader.entries()].filter(entry => entry.fiber?.state === FiberState.ACTIVE)
+    if (this.internal === undefined) {
+      const patches = readProfilePatches('dsh', profile)
+      const result = await recomposeProfile(this.ownerContext.root, patches, 'dsh', { requiredIds, running })
+      return { ...result, pending: [], restartReason: result.restartReason ?? 'module-comparison' }
+    }
     // Read while the packages are still on disk, so a removed link's target is known in its real spellings.
     const mapped = mappedDirectories(this.ownerContext.get('pluginPackages')?.resolution)
     let comparison: ProfileComparison | undefined

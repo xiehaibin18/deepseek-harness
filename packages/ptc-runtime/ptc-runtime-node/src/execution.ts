@@ -1,5 +1,6 @@
 /** Select program syntax and own temporary or retained Node processes. */
-import { stripTypeScriptTypes } from 'node:module'
+import { spawnSync } from 'node:child_process'
+import * as nodeModule from 'node:module'
 import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PtcProgramFormat, PtcRunRequest, PtcRunResult, PtcRunSpec } from '@deepseek-ai/dsh-ptc-runtime'
@@ -129,7 +130,32 @@ const STRIP_PREFIX = 'async function __dsh_program__() {\n'
 const STRIP_SUFFIX = '\n}'
 const RETAINED_STATE_INSTRUCTIONS = 'Timeout and cancellation results say whether retained variables were preserved or cleared. Restart, sandbox changes, output overflow, or process failure clears them. Recreate missing variables and resources; conversation history does not restore state. Earlier mutations and tool effects are not rolled back. Approved sandbox escalations use a fresh environment and discard its variables afterward. Do not redeclare existing let, const, or class names; reuse mutable bindings or choose new names. Await tools and cleanup before returning; unfinished tools reject. After completion, timeout, or cancellation, new tool calls are rejected and captured output is discarded; background work may still change state. Await child-process completion before returning; raw output belongs to the active evaluation.'
 
+function resolveTypeStripper(config: ResolvedConfig): (program: string) => string {
+  if (typeof nodeModule.stripTypeScriptTypes === 'function') return nodeModule.stripTypeScriptTypes
+
+  const launch = config.launch
+  if (launch.kind !== 'node-script' || !isAbsolute(launch.executable)) {
+    throw new Error('ptc-runtime-node: this Host requires an absolute Node executable for TypeScript stripping')
+  }
+  return (program) => {
+    const result = spawnSync(launch.executable, ['-e', [
+      "const { readFileSync } = require('node:fs')",
+      "const { stripTypeScriptTypes } = require('node:module')",
+      'process.stdout.write(stripTypeScriptTypes(readFileSync(0, "utf8")))',
+    ].join('\n')], {
+      input: program,
+      encoding: 'utf8',
+      env: {},
+      timeout: config.stopGraceMs,
+    })
+    if (result.error) throw result.error
+    if (result.status !== 0) throw new Error(result.stderr.trim() || 'Node could not strip PTC TypeScript')
+    return result.stdout
+  }
+}
+
 function resolveMode(config: ResolvedConfig): ExecutionMode {
+  const stripTypeScriptTypes = resolveTypeStripper(config)
   switch (config.executionMode) {
     case 'per-call': return {
       format: 'function-body',

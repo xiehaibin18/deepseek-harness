@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { moduleResolve } from 'import-meta-resolve'
 import { ModuleLoader } from '@deepseek-ai/cordis-plugin-loader'
 import type { LocalizedText, PluginLocalizedMeta } from '@deepseek-ai/dsh-package-manifest'
 import { barePackageName } from './profile-resolution/resolver.ts'
@@ -64,13 +65,14 @@ function assertPackageOwned(file: string, name: string): void {
 }
 
 /**
- * Resolve a plugin resource through the active Node ESM resolver without evaluating it.
+ * Resolve a plugin resource without evaluating the target module.
  * @param specifier - plugin module or exported resource specifier.
  * @param parentURL - owning module-resolution base.
- * @returns the local filesystem path selected by Node and the active profile.
+ * @returns the local filesystem path selected by the active profile.
  * @throws when the resolver is unavailable or the resource cannot resolve to a local file.
  */
 export function resolvePluginResource(specifier: string, parentURL: string): string {
+  if (process.versions.bun !== undefined) return fileURLToPath(moduleResolve(specifier, new URL(parentURL)))
   const loader = ModuleLoader.fromInternal()
   if (loader === undefined) throw new Error('Plugin metadata requires the Node module resolver')
   const result = loader.version === 'v2'
