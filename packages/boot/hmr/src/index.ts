@@ -385,7 +385,14 @@ class Hmr extends Service {
       })
       yield () => { unsubscribe(); started.resolve(false); return Promise.resolve() }
       const manifestPath = join(profile.dir, 'package.json')
-      const patchFiles = [profile.patchPath, join(profile.home, PROFILE_PATCH_FILENAME)]
+      // A file named by several layers or repeated `--patch` options, under any spelling, is watched and compared once.
+      const canonicalFiles = new Set<string>()
+      const patchFiles = [profile.patchPath, join(profile.home, PROFILE_PATCH_FILENAME), ...profile.overlayPaths].filter((filename) => {
+        const canonical = canonicalPath(filename)
+        if (canonicalFiles.has(canonical)) return false
+        canonicalFiles.add(canonical)
+        return true
+      })
       let lastInputs: string | undefined
       let lastBundles = JSON.stringify(profile.startedBundles)
       const refresh = async (manifestOnly: boolean): Promise<void> => {
@@ -944,9 +951,10 @@ class Hmr extends Service {
     if (profile === undefined) throw new Error('HMR profile reconciliation requires profileContext')
     // Entries this recomposition stops start again, and fail it when they cannot.
     const running = [...this.ctx.loader.entries()].filter(entry => entry.fiber?.state === FiberState.ACTIVE)
+    const recompose = (patches: ReturnType<typeof readProfilePatches>) =>
+      recomposeProfile(this.ownerContext[Context.root], patches, 'dsh', { requiredIds, running })
     if (this.internal === undefined) {
-      const patches = readProfilePatches('dsh', profile)
-      const result = await recomposeProfile(this.ownerContext.root, patches, 'dsh', { requiredIds, running })
+      const result = await recompose(readProfilePatches('dsh', profile))
       return { ...result, pending: [], restartReason: result.restartReason ?? 'module-comparison' }
     }
     // Read while the packages are still on disk, so a removed link's target is known in its real spellings.
@@ -987,7 +995,7 @@ class Hmr extends Service {
           return job !== undefined && namespaceOf(job) === undefined
         }))
       }, undefined)
-      const result = await recomposeProfile(this.ownerContext.root, patches, 'dsh', { requiredIds, running })
+      const result = await recompose(patches)
       const restartReason = compared === undefined || unavailable ? 'module-comparison' : result.restartReason
       return { warnings: result.warnings, pending, ...restartReason === undefined ? {} : { restartReason } }
     } finally {

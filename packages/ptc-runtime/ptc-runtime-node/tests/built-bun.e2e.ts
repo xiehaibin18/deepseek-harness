@@ -67,6 +67,8 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
     expect(result.exitCode, result.stderr).toBe(0)
     const outcomes = JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '') as { first: unknown; second: unknown }
     expect(outcomes.first).toMatchObject({ value: { remembered: 11, runtime: 'string', envKeys: [[], [], []] } })
-    expect(outcomes.second).toMatchObject({ value: { retained: mode === 'persistent-in-memory' ? 11 : null, local: 22 } })
+    // Scoped REPL imports retain the first directory as the referrer.
+    const scoped = mode === 'persistent-in-memory'
+    expect(outcomes.second).toMatchObject({ value: { retained: scoped ? 11 : null, local: scoped ? 11 : 22 } })
   }, 60_000)
 })
