@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { Context } from '@deepseek-ai/cordis'
 import { SandboxUnavailableError } from '@deepseek-ai/dsh-sandbox'
-import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mountRuntime } from './setup.ts'
 import type { Config, LaunchConfig } from '../src/index.ts'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -28,19 +28,6 @@ const launches: { runtime: string; launch?: LaunchConfig }[] = [
 ]
 
 describe.each(launches)('$runtime PTC worker', ({ launch }) => {
-  // A Bun worker requires an absolute Node path for type stripping even when the host strips natively.
-  let previousNodeExecutable: string | undefined
-  beforeAll(() => {
-    if (launch?.kind !== 'bun-script') return
-    previousNodeExecutable = process.env.DSP_NODE_EXECUTABLE
-    process.env.DSP_NODE_EXECUTABLE = process.execPath
-  })
-  afterAll(() => {
-    if (launch?.kind !== 'bun-script') return
-    if (previousNodeExecutable === undefined) delete process.env.DSP_NODE_EXECUTABLE
-    else process.env.DSP_NODE_EXECUTABLE = previousNodeExecutable
-  })
-
   async function setup(mode: 'read-only' | 'workspace-write', config: Config) {
     const root = realpathSync.native(await mkdtemp(join(homedir(), '.dsh-persistent-sandbox-')))
     const cwd = join(root, 'workspace')

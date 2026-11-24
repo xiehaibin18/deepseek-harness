@@ -1,5 +1,4 @@
 /** Select program syntax and own temporary or retained Node processes. */
-import { spawnSync } from 'node:child_process'
 import * as nodeModule from 'node:module'
 import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -141,37 +140,35 @@ function scopedReplMode(outputInstructions: string, stripTypeScript: ExecutionMo
   }
 }
 
-function resolveTypeStripper(config: ResolvedConfig): (program: string) => string {
-  if (typeof nodeModule.stripTypeScriptTypes === 'function') return nodeModule.stripTypeScriptTypes
-
-  const launch = config.launch
-  const nodeExecutable = launch.kind === 'bun-script' ? process.env.DSP_NODE_EXECUTABLE
-    : launch.kind === 'node-script' ? launch.executable : undefined
-  if (nodeExecutable === undefined || !isAbsolute(nodeExecutable)) {
-    throw new Error('ptc-runtime-node: this Host requires an absolute Node executable for TypeScript stripping')
+/** The package Node strips TypeScript with, for a Host whose runtime omits the `node:module` API. */
+function amaroStripper(): (program: string) => string {
+  let transformSync: typeof import('amaro').transformSync
+  try {
+    // Loading compiles the WASM module once; every later call stays in this process.
+    const amaro = nodeModule.createRequire(import.meta.url)('amaro') as typeof import('amaro')
+    transformSync = amaro.transformSync
+  } catch (error) {
+    throw new Error(`ptc-runtime-node: this Host requires the amaro dependency for TypeScript stripping: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
   return (program) => {
-    const result = spawnSync(nodeExecutable, ['-e', [
-      "const { readFileSync } = require('node:fs')",
-      "const { stripTypeScriptTypes } = require('node:module')",
-      'process.stdout.write(stripTypeScriptTypes(readFileSync(0, "utf8")))',
-    ].join('\n')], {
-      input: program,
-      encoding: 'utf8',
-      env: {},
-      // The run's own deadline reports a slow helper; this bound ends only a helper that outlives every accepted run.
-      timeout: config.maxTimeoutMs,
-      // Stripping never lengthens the program, and diagnostics share the budget of program output.
-      maxBuffer: Buffer.byteLength(program) + config.maxOutputBytes,
-    })
-    if (result.error) throw new Error(`ptc-runtime-node: TypeScript stripping failed: ${result.error.message}`, { cause: result.error })
-    if (result.status !== 0) throw new Error(result.stderr.trim() || 'Node could not strip PTC TypeScript')
-    return result.stdout
+    try {
+      return transformSync(program).code
+    } catch (error) {
+      // amaro raises a plain failure object where Node raises a SyntaxError with the same message.
+      if (error instanceof Error) throw error
+      const { message } = (error ?? {}) as { message?: unknown }
+      throw new SyntaxError(typeof message === 'string' ? message : String(error), { cause: error })
+    }
   }
 }
 
+function resolveTypeStripper(): (program: string) => string {
+  if (typeof nodeModule.stripTypeScriptTypes === 'function') return nodeModule.stripTypeScriptTypes
+  return amaroStripper()
+}
+
 function resolveMode(config: ResolvedConfig): ExecutionMode {
-  const stripTypeScriptTypes = resolveTypeStripper(config)
+  const stripTypeScriptTypes = resolveTypeStripper()
   const stripTypeScript = (source: string) => quietRuntimeCall(() => stripTypeScriptTypes(source))
   const freshProcess = config.launch.kind === 'bun-script' ? 'Each call runs in a fresh Bun process.' : 'Each call runs in a fresh Node process.'
   const outputInstructions = 'Use inspect(...values) to display output. Do not use console.'
