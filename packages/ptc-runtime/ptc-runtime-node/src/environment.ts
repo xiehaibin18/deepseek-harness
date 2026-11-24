@@ -45,13 +45,15 @@ export function quietRuntimeCall<T>(call: () => T): T {
 
 /**
  * Clear inherited credentials while preserving native child-process startup paths.
- * With the native child process, preloaded node:process exports observe the replacement.
+ * Node retains native startup variables. Bun exposes the original environment through
+ * built-in exports, so its process removes the startup variables too.
  * Isolated state objects only replace their own environment; they do not replace the native process.
  * @param state - Native child process in production, or isolated state in in-process tests.
  */
 export function clearProgramEnvironment(state: { env: NodeJS.ProcessEnv }): void {
+  const keepStartupPaths = process.versions.bun === undefined
   for (const key of Object.keys(state.env)) {
-    if (!STARTUP_ENVIRONMENT_NAMES.has(key.toUpperCase())) Reflect.deleteProperty(state.env, key)
+    if (!keepStartupPaths || !STARTUP_ENVIRONMENT_NAMES.has(key.toUpperCase())) Reflect.deleteProperty(state.env, key)
   }
   state.env = Object.create(null) as NodeJS.ProcessEnv
   syncBuiltinESMExports()

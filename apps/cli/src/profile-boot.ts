@@ -336,9 +336,10 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
       // Before any config-tree entry mounts, so plugins resolve all launch-time
       // environment values from the same immutable launch snapshot.
       hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.environment)
-      await hostCtx.plugin(PluginPackages, {
-        resolution: composed.resolution,
-      })
+      // Bun resolves the Web profile through its on-disk dependency tree.
+      // Node still installs profile interception for every ordinary launch.
+      const bunWeb = process.versions.bun !== undefined && options.profile === 'web'
+      await hostCtx.plugin(PluginPackages, bunWeb ? {} : { resolution: composed.resolution })
       // The command line and bounded exit request are launcher facts available
       // to every app plugin that injects the argument snapshot.
       provideCmdline(hostCtx, {

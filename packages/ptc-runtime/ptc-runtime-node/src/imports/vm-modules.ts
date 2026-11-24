@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises'
 import { dirname, extname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { types } from 'node:util'
-import { registerHooks, type ImportAttributes, type ResolveFnOutput } from 'node:module'
+import * as nodeModule from 'node:module'
+import type { ImportAttributes, ResolveFnOutput } from 'node:module'
 import type { ProgramImportHandler } from '../evaluators/types.ts'
 import { ImportEvaluationEndedError } from './evaluation-ended.ts'
 
@@ -212,7 +213,7 @@ export class VmModuleImportLoader {
 function resolveImport(specifier: string, parentURL: string): ResolveFnOutput {
   const marker = 'dsh-ptc:resolve'
   let format: ResolveFnOutput['format']
-  const hooks = registerHooks({
+  const hooks = nodeModule.registerHooks({
     resolve(request, context, nextResolve) {
       if (request !== marker) return nextResolve(request, context)
       const resolved = nextResolve(specifier, { ...context, parentURL })

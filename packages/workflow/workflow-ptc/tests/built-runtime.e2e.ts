@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
@@ -13,11 +13,19 @@ const built = [
   new URL('../../../ptc-runtime/ptc-runtime-node/lib/index.js', import.meta.url),
   new URL('../../../ptc-runtime/ptc-runtime-node/lib/process.js', import.meta.url),
 ].every(path => existsSync(path))
-const runNode = promisify(execFile)
+const runProgram = promisify(execFile)
+const bun = process.platform === 'darwin' ? process.env.DSH_TEST_BUN_EXECUTABLE : undefined
+const launches = [
+  { runtime: 'Node', host: process.execPath, config: {} },
+  ...bun === undefined ? [] : [{
+    runtime: 'Bun', host: bun,
+    config: { executionMode: 'persistent-in-memory', launch: { kind: 'bun-script', executable: bun } },
+  }],
+]
 
-/** Plain Node loads the published workflow package and PTC child bootstrap. */
+/** Exercise the published Workflow package against the selected PTC child bootstrap. */
 describe.skipIf(!built)('built workflow PTC runtime', () => {
-  it('runs a structured child and confines direct writes through installed exports', async () => {
+  it.each(launches)('runs a structured child and confines direct writes with $runtime', async ({ runtime, host, config }) => {
     const driverRoot = await mkdtemp(join(packageRoot, '.built-runtime-'))
     let root: string | undefined
     try {
@@ -36,7 +44,7 @@ try {
     await ctx.plugin((await import('@deepseek-ai/dsh-' + name)).default, {})
   }
   await ctx.plugin((await import('@deepseek-ai/dsh-sandbox-policy')).default, { mode: 'read-only', workspaceRoot: process.argv[2] })
-  await ctx.plugin((await import('@deepseek-ai/dsh-ptc-runtime-node')).default, {})
+  await ctx.plugin((await import('@deepseek-ai/dsh-ptc-runtime-node')).default, ${JSON.stringify(config)})
   await ctx.plugin((await import('@deepseek-ai/dsh-subagent')).default, {})
   let selectedStarts = 0
   ctx.subagents.registerProvider({
@@ -72,7 +80,16 @@ try {
   } finally { await run.dispose() }
 } finally { await ctx.fiber.dispose() }
 `, 'utf8')
-      const { stdout } = await runNode(process.execPath, [driver, cwd, outside], { cwd: packageRoot, timeout: 60_000 })
+      const args = runtime === 'Bun'
+        ? ['--config=/dev/null', '--tsconfig-override=/dev/null', '--no-env-file', '--no-install', driver, cwd, outside]
+        : [driver, cwd, outside]
+      const { stdout } = await runProgram(host, args, {
+        cwd: packageRoot, timeout: 60_000,
+        env: {
+          HOME: root, TMPDIR: root, DSH_HOME: join(root, 'dsh'), DSH_AGENTS_HOME: join(root, 'agents'),
+          DSP_NODE_EXECUTABLE: process.execPath, PATH: dirname(process.execPath) + ':/usr/bin:/bin',
+        },
+      })
       expect(stdout).toContain('built-runtime-smoke-ok')
       expect(await readFile(outside, 'utf8')).toBe('unchanged')
     } finally {

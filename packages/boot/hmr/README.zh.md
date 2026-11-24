@@ -106,6 +106,7 @@ Loader entry 保留原始导入结果。HMR 为每个 entry 名称与配置树 b
 <a id="known-limitations-and-deferred-work"></a>
 
 - 模块替换需要 Node loader 内部接口。框架依赖变化调用宿主提供的 `loader.exit()` 钩子；HMR 本身不重启进程。
+- Bun Web Host 使用 `root: []` 时支持配置重新组合，并将配置变更报告为已应用。已加载模块的代码发生变化时，重启 Host 以加载新代码。
 - 仅限于 `package.json` 的变化不会被检测到。`node_modules` 之下 manifest 的监听通知仍被忽略。浏览器 Client 模块图保留独立的浏览器侧加载机制。
 - 替换沿静态导入传播。对陈旧模块的动态 `import()` 在下次调用时求值新文件，而其导入方继续运行；已存在的 Worker 和 TSX loader 线程保留各自的模块缓存。
 - profile 的 `node_modules` 之下的每个符号链接都会扩大比较范围。链接进程入口（通过 bin 链接的真实路径定位）静态导入的包（例如来自 dsh checkout 的 `dsh-app-boot`、Cordis 或 Loader）会把宿主模块纳入范围；这些模块的变化保持待处理，Plugin Manager 对后续操作报告 `restart-required`，直到进程重启。Loader entry 导入的已链接 dsh 包与其他插件一样被替换。

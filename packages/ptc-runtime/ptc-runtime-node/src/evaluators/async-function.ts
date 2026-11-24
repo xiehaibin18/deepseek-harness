@@ -23,14 +23,15 @@ export function createAsyncFunctionEvaluator(options: ProgramEvaluatorOptions): 
       const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => AsyncProgram
       const body = `'use strict';\n${code}`
       let fn: AsyncProgram
-      if (imports === undefined) fn = new AsyncFunction(...Object.keys(globals), body)
+      if (imports === undefined && process.versions.bun === undefined) fn = new AsyncFunction(...Object.keys(globals), body)
       else {
-        const sourceUrl = imports.forFile(resolve(process.cwd(), 'ptc-program.js'))
+        const filename = resolve(process.cwd(), 'ptc-program.js')
+        const sourceUrl = imports?.forFile(filename)
         const factory = compileFunction('return new (async () => {}).constructor(...args)', ['args'], {
-          filename: sourceUrl, importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+          filename: sourceUrl ?? filename, importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
         }) as (args: string[]) => AsyncProgram
-        // V8 caches constructor bodies across callers; each evaluator and filename needs a distinct source URL.
-        fn = factory([...Object.keys(globals), `${body}\n//# sourceURL=${sourceUrl}`])
+        // V8 caches constructor bodies across callers; each hooked program needs a distinct source URL.
+        fn = factory([...Object.keys(globals), sourceUrl === undefined ? body : `${body}\n//# sourceURL=${sourceUrl}`])
       }
       void fn(...Object.values(globals)).then(
         (value) => { finish({ ok: true, value }) },
