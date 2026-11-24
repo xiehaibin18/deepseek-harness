@@ -148,7 +148,7 @@ function amaroStripper(): (program: string) => string {
     const amaro = nodeModule.createRequire(import.meta.url)('amaro') as typeof import('amaro')
     transformSync = amaro.transformSync
   } catch (error) {
-    throw new Error(`ptc-runtime-node: this Host requires the amaro dependency for TypeScript stripping: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    throw new Error(`ptc-runtime-node: this Host requires the amaro package, an optional peer dependency, for TypeScript stripping: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
   return (program) => {
     try {
