@@ -1,4 +1,5 @@
 /** Workflow child ownership and progress over the shared sandboxed PTC executor. */
+import { Buffer } from 'node:buffer'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-working-directory'
@@ -25,7 +26,8 @@ interface ChildRecord {
   disposal?: Promise<void>
 }
 
-const GUEST_URL = `data:text/javascript,${encodeURIComponent(WORKFLOW_GUEST_SOURCE)}`
+// Bun 1.4.5 loses the guest's named export with a percent-encoded URL.
+const GUEST_URL = `data:text/javascript;base64,${Buffer.from(WORKFLOW_GUEST_SOURCE, 'utf8').toString('base64')}`
 const PROGRAM = `const { runWorkflowGuest } = await import(${JSON.stringify(GUEST_URL)}); return await runWorkflowGuest(workflowHost);`
 
 function object(value: unknown): Record<string, unknown> {
