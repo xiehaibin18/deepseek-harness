@@ -41,7 +41,8 @@ jobs:
         run: pnpm run build --serial
 
       # Node-only coverage cannot instrument the forked Bun child. Exercise the
-      # real transport, confinement, and built workflow with both runtimes.
+      # real transport, confinement, built workflow, and Bun Host recomposition
+      # with both runtimes.
       - name: Verify runtime parity
         run: |
           export DSH_TEST_BUN_EXECUTABLE="$(command -v bun)"
@@ -50,6 +51,8 @@ jobs:
           test -s packages/ptc-runtime/ptc-runtime-node/lib/index.js
           test -s packages/ptc-runtime/ptc-runtime-node/lib/process.js
           test -s packages/workflow/workflow-ptc/lib/index.js
+          test -s packages/boot/hmr/lib/index.js
+          test -s packages/boot/app-boot/lib/index.js
 
           pnpm exec vitest run --maxWorkers=2 \
             packages/subprocess/subprocess/tests/control.spec.ts \
@@ -59,4 +62,5 @@ jobs:
             packages/boot/hmr/tests/profile.spec.ts
           pnpm run test:e2e --maxWorkers=1 \
             packages/ptc-runtime/ptc-runtime-node/tests/built-bun.e2e.ts \
-            packages/workflow/workflow-ptc/tests/built-runtime.e2e.ts
+            packages/workflow/workflow-ptc/tests/built-runtime.e2e.ts \
+            packages/boot/hmr/tests/built-bun.e2e.ts
