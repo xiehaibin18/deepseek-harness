@@ -954,8 +954,8 @@ class Hmr extends Service {
     const recompose = (patches: ReturnType<typeof readProfilePatches>) =>
       recomposeProfile(this.ownerContext[Context.root], patches, 'dsh', { requiredIds, running })
     if (this.internal === undefined) {
-      const result = await recompose(readProfilePatches('dsh', profile))
-      return { ...result, pending: [], restartReason: result.restartReason ?? 'module-comparison' }
+      // No module cache is compared, so the recomposition alone decides what applied and what waits for a restart.
+      return { ...await recompose(readProfilePatches('dsh', profile)), pending: [] }
     }
     // Read while the packages are still on disk, so a removed link's target is known in its real spellings.
     const mapped = mappedDirectories(this.ownerContext.get('pluginPackages')?.resolution)
