@@ -159,9 +159,12 @@ function resolveTypeStripper(config: ResolvedConfig): (program: string) => strin
       input: program,
       encoding: 'utf8',
       env: {},
-      timeout: config.stopGraceMs,
+      // The run's own deadline reports a slow helper; this bound ends only a helper that outlives every accepted run.
+      timeout: config.maxTimeoutMs,
+      // Stripping never lengthens the program, and diagnostics share the budget of program output.
+      maxBuffer: Buffer.byteLength(program) + config.maxOutputBytes,
     })
-    if (result.error) throw result.error
+    if (result.error) throw new Error(`ptc-runtime-node: TypeScript stripping failed: ${result.error.message}`, { cause: result.error })
     if (result.status !== 0) throw new Error(result.stderr.trim() || 'Node could not strip PTC TypeScript')
     return result.stdout
   }

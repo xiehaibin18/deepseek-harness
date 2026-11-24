@@ -10,7 +10,34 @@ const bun = process.env.DSH_TEST_BUN_EXECUTABLE
 const pkgDir = fileURLToPath(new URL('..', import.meta.url))
 const built = ['lib/index.js', 'lib/process.js'].every(file => existsSync(join(pkgDir, file)))
 
+/** A valid program whose bytes exceed the default output buffer of a child process. */
+function largeProgram(): string {
+  let program = ''
+  for (let index = 0; program.length < 2 * 1024 * 1024; index++) program += `const value${index}: number = ${index}\n`
+  return `${program}return value0`
+}
+
 describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('built Bun PTC runtime', () => {
+  /** Run a Host script under Bun with its home and temporary directory inside `root`. */
+  async function host(root: string, script: string) {
+    return execa(bun ?? 'bun', ['--config=/dev/null', '--tsconfig-override=/dev/null', '--no-env-file', '--no-install', '-e', script], {
+      cwd: pkgDir,
+      extendEnv: false,
+      env: {
+        HOME: root,
+        TMPDIR: root,
+        DSH_HOME: join(root, 'dsh'),
+        DSH_AGENTS_HOME: join(root, 'agents'),
+        DSP_NODE_EXECUTABLE: process.execPath,
+        PATH: dirname(process.execPath) + ':/usr/bin:/bin',
+      },
+      stdin: 'ignore',
+      timeout: 55_000,
+      killSignal: 'SIGKILL',
+      reject: false,
+    })
+  }
+
   it.each(['persistent-in-memory', 'per-call', 'vm-script'] as const)('executes %s with Node type stripping and workspace-relative imports', async (mode) => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-bun-ptc-'))
     onTestFinished(async () => { await rm(root, { recursive: true, force: true }) })
@@ -46,22 +73,7 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
       '} finally { await ctx.fiber.dispose() }',
     ].join('\n')
 
-    const result = await execa(bun ?? 'bun', ['--config=/dev/null', '--tsconfig-override=/dev/null', '--no-env-file', '--no-install', '-e', script], {
-      cwd: pkgDir,
-      extendEnv: false,
-      env: {
-        HOME: root,
-        TMPDIR: root,
-        DSH_HOME: join(root, 'dsh'),
-        DSH_AGENTS_HOME: join(root, 'agents'),
-        DSP_NODE_EXECUTABLE: process.execPath,
-        PATH: dirname(process.execPath) + ':/usr/bin:/bin',
-      },
-      stdin: 'ignore',
-      timeout: 55_000,
-      killSignal: 'SIGKILL',
-      reject: false,
-    })
+    const result = await host(root, script)
     expect(result.timedOut).toBe(false)
     expect(result.signal).toBeUndefined()
     expect(result.exitCode, result.stderr).toBe(0)
@@ -70,5 +82,38 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
     // Scoped REPL imports retain the first directory as the referrer.
     const scoped = mode === 'persistent-in-memory'
     expect(outcomes.second).toMatchObject({ value: { retained: scoped ? 11 : null, local: scoped ? 11 : 22 } })
+  }, 60_000)
+
+  it.each([
+    { name: 'a one-line program beside a one-millisecond stop grace', config: { stopGraceMs: 1 }, program: 'const answer: number = 41\nreturn answer + 1', value: 42 },
+    { name: 'a program larger than the default output buffer of a child process', config: {}, program: largeProgram(), value: 0 },
+  ])('strips $name in the Bun Host', async ({ config, program, value }) => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-bun-strip-'))
+    onTestFinished(async () => { await rm(root, { recursive: true, force: true }) })
+    const programPath = join(root, 'program.ts')
+    await writeFile(programPath, program)
+    const script = [
+      "const { Context } = await import('@deepseek-ai/cordis')",
+      "const { NodePtcRuntime } = await import('@deepseek-ai/dsh-ptc-runtime-node')",
+      "const program = await (await import('node:fs/promises')).readFile(" + JSON.stringify(programPath) + ", 'utf8')",
+      'const ctx = new Context()',
+      'try {',
+      "  for (const name of ['session-projection', 'fs-local', 'subprocess-local', 'sandbox-local']) {",
+      "    await ctx.plugin((await import('@deepseek-ai/dsh-' + name)).default, {})",
+      '  }',
+      "  await ctx.plugin((await import('@deepseek-ai/dsh-sandbox-policy')).default, " + JSON.stringify({ mode: 'read-only', workspaceRoot: root }) + ')',
+      '  await ctx.plugin(NodePtcRuntime, ' + JSON.stringify({ executionMode: 'per-call', ...config }) + ')',
+      '  const outcome = await ctx.ptcRuntime.run(ctx.ptcRuntime.resolve({ program, bindings: [], cwd: ' + JSON.stringify(root) + ', stateOwner: {} }))',
+      '  console.log(JSON.stringify(outcome))',
+      '} finally { await ctx.fiber.dispose() }',
+    ].join('\n')
+
+    const result = await host(root, script)
+    expect(result.timedOut).toBe(false)
+    expect(result.signal).toBeUndefined()
+    expect(result.exitCode, result.stderr).toBe(0)
+    const outcome = JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '') as { value?: unknown; error?: unknown }
+    expect(outcome.error).toBeUndefined()
+    expect(outcome.value).toBe(value)
   }, 60_000)
 })
