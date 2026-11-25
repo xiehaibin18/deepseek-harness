@@ -143,7 +143,7 @@ describe('Node runtime host failures', () => {
     h.onBoot(() => { booted.resolve(undefined) })
     const controller = new AbortController()
     let active: ReturnType<typeof h.start> | undefined
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     try {
       active = h.start({ ...request, timeoutMs: null, signal: controller.signal })
       const settled = vi.fn()
@@ -412,7 +412,7 @@ describe('Node runtime host failures', () => {
     vi.mocked(h.terminate).mockImplementation(() => { h.direct.resolve({ exitCode: 0, signal: null }) })
     vi.mocked(h.waitForExit).mockImplementation(async () => { cleaning.resolve(undefined); return true })
     h.onBoot(() => { h.complete(failure === undefined ? {} : { error: failure }) })
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     try {
       const pending = h.start()
       await cleaning.promise

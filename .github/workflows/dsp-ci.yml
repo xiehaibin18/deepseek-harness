@@ -54,9 +54,10 @@ jobs:
           test -s packages/boot/hmr/lib/index.js
           test -s packages/boot/app-boot/lib/index.js
 
-          pnpm exec vitest run --maxWorkers=2 \
+          pnpm exec vitest run --maxWorkers=1 \
             packages/subprocess/subprocess/tests/control.spec.ts \
             packages/subprocess/subprocess/tests/control-bun.spec.ts \
+            packages/ptc-runtime/ptc-runtime-node/tests/timeout.spec.ts \
             packages/ptc-runtime/ptc-runtime-node/tests/persistent-sandbox.spec.ts \
             packages/boot/app-boot/tests/package-meta.spec.ts \
             packages/boot/hmr/tests/profile.spec.ts

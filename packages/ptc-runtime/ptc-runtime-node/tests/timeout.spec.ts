@@ -17,13 +17,32 @@ describe.each([false, true])('deadline reporting with retained state %s', (retai
 
   const cleared = retained ? '; retained variables were cleared' : ''
 
+  it('checks elapsed time after executable lookup before starting the program', async () => {
+    const h = await setup()
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
+    try {
+      h.resolveExecutable.mockImplementationOnce(() => {
+        clock.mockReturnValue(101)
+        return Promise.resolve(process.execPath)
+      })
+      const result = await h.start({ ...h.request, program: '42' }, NO_INITIAL_FRAME)
+      expect(result.error).toEqual({ kind: 'timeout', message: `execution timed out before code started (100ms)${cleared}` })
+      expect(h.spawn).not.toHaveBeenCalled()
+    } finally { clock.mockRestore() }
+  })
+
   it('expires during executable lookup without starting code or returning before setup settles', async () => {
     const h = await setup()
     const lookup = Promise.withResolvers<string>()
-    h.resolveExecutable.mockReturnValue(lookup.promise)
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const enteredLookup = Promise.withResolvers<undefined>()
+    h.resolveExecutable.mockImplementationOnce(() => {
+      enteredLookup.resolve(undefined)
+      return lookup.promise
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const run = h.start(h.request, NO_INITIAL_FRAME)
     try {
+      await enteredLookup.promise
       const settled = vi.fn()
       void run.then(settled)
       await vi.advanceTimersByTimeAsync(100)
@@ -43,7 +62,7 @@ describe.each([false, true])('deadline reporting with retained state %s', (retai
     const h = await setup()
     const spawned = Promise.withResolvers<undefined>()
     h.spawn.mockImplementation(() => { spawned.resolve(undefined); return h.handle })
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const run = h.start(h.request, NO_INITIAL_FRAME)
     try {
       await spawned.promise
@@ -66,7 +85,7 @@ describe.each([false, true])('deadline reporting with retained state %s', (retai
     const exited = Promise.withResolvers<boolean>()
     h.onBoot(() => { h.emit({ t: 'q', m: 'log', a: ['partial output'] }); booted.resolve(undefined) })
     h.waitForExit.mockReturnValue(exited.promise)
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const run = h.start()
     try {
       await booted.promise
@@ -114,7 +133,7 @@ async function retainedChild(config: Config = {}) {
 describe.each(['timeout', 'abort'] as const)('retained %s', (action) => {
   it('continues after output overflow until the original stop condition occurs', async () => {
     const h = await retainedChild({ maxOutputBytes: 128 })
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const pending = h.start()
     try {
       await h.booted.promise
@@ -137,7 +156,7 @@ describe.each(['timeout', 'abort'] as const)('retained %s', (action) => {
 
   it.each(['missing completion', 'rejection', 'malformed completion'] as const)('terminates after %s and recreates the environment', async (failure) => {
     const h = await retainedChild()
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     try {
       const pending = h.start()
       await h.booted.promise
@@ -168,7 +187,7 @@ describe.each(['timeout', 'abort'] as const)('retained %s', (action) => {
   it('rejects queued activity after revocation and waits for the original run without terminating the process', async () => {
     const h = await retainedChild()
     const binding = vi.fn(async () => 42)
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     try {
       const pending = h.start({ ...h.request, bindings: [{ global: 'tools', functions: { value: binding } }] })
       const settled = vi.fn()
@@ -196,7 +215,7 @@ it('rejects overlapping runs until fallback process cleanup completes', async ()
   const h = await retainedChild()
   const exited = Promise.withResolvers<boolean>()
   h.waitForExit.mockReturnValue(exited.promise)
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
   try {
     const pending = h.start()
     const settled = vi.fn()
@@ -219,7 +238,7 @@ it('rejects overlapping runs until fallback process cleanup completes', async ()
 it('blocks reuse after fallback cleanup fails until release succeeds', async () => {
   const h = await retainedChild()
   h.waitForExit.mockRejectedValueOnce(new Error('exit not confirmed'))
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
   try {
     const pending = h.start()
     await h.booted.promise
@@ -236,7 +255,7 @@ it('blocks reuse after fallback cleanup fails until release succeeds', async () 
 
 it('allows explicit release to terminate a process awaiting interrupted execution settlement', async () => {
   const h = await retainedChild()
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
   try {
     const pending = h.start()
     await h.booted.promise
@@ -262,7 +281,7 @@ it('terminates when cancellation follows control-channel closure', async () => {
 
 it('preserves the timeout kind and retained state when its diagnostic is truncated', async () => {
   const h = await retainedChild({ maxOutputBytes: 70 })
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
   try {
     const pending = h.start()
     await h.booted.promise
@@ -277,7 +296,7 @@ it('preserves the timeout kind and retained state when its diagnostic is truncat
 
 it('keeps the timeout outcome when run completes during recovery and ignores a duplicate reply during the next run', async () => {
   const h = await retainedChild()
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
   try {
     const pending = h.start()
     await h.booted.promise
@@ -306,7 +325,7 @@ it('keeps the timeout outcome when run completes during recovery and ignores a d
 
 it('does not interrupt an evaluation that completed before its deadline', async () => {
   const h = await retainedChild()
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
   try {
     h.onBoot(() => { h.complete({}) })
     expect((await h.start()).error).toBeUndefined()

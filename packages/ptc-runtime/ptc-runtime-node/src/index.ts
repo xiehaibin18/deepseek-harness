@@ -66,7 +66,7 @@ export class NodePtcRuntime extends PtcRuntime {
     if (this.initializer !== undefined) throw new Error('ptc-runtime-node: environment initializer is already registered')
     if (this.admitted) throw new Error('ptc-runtime-node: register initialization before the first run')
     const registration: InitializerRegistration = {
-      program: this.execution.mode.stripTypes(program), removing: false,
+      program: this.execution.stripInitializer(program), removing: false,
     }
     this.initializer = registration
     return () => {
