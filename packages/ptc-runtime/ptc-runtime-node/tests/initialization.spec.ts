@@ -95,7 +95,7 @@ describe('Node environment initialization', () => {
     const pendingBinding = Promise.withResolvers<null>()
     const controller = new AbortController()
     const program = vi.fn(async () => null)
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const pending = run('await tools.program({})', {
       timeoutMs: action === 'timeout' ? 200 : null, signal: controller.signal,
       bindings: tools({ wait: () => { entered.resolve(); return pendingBinding.promise }, program }),
@@ -125,7 +125,7 @@ describe('Node environment initialization', () => {
     const initialize = Promise.withResolvers<null>()
     const program = Promise.withResolvers<null>()
     const controller = new AbortController()
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const pending = run('await tools.program({})', {
       timeoutMs: 100, signal: controller.signal,
       bindings: tools({

@@ -1,5 +1,4 @@
 /** Select program syntax and own temporary or retained Node processes. */
-import * as nodeModule from 'node:module'
 import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { PtcRuntimeError, type PtcProgramFormat, type PtcRunRequest, type PtcRunResult, type PtcRunSpec } from '@deepseek-ai/dsh-ptc-runtime'
@@ -9,7 +8,7 @@ import type { ResolvedConfig } from './config.ts'
 import { validateBindings } from './bindings.ts'
 import type { PolicyProcesses } from './policy-processes.ts'
 import { ProgramWorker } from './worker.ts'
-import { quietRuntimeCall } from './environment.ts'
+import { resolveTypeStripper } from './type-stripper.ts'
 
 /** Syntax, state retention and model guidance selected during provider construction. */
 export interface ExecutionMode {
@@ -22,9 +21,10 @@ export interface ExecutionMode {
   /**
    * Erase TypeScript in the selected syntax without executing the program.
    * @param program - Model-written TypeScript source.
-   * @returns JavaScript accepted by the selected evaluator.
+   * @param signal - Cancels and drains out-of-thread stripping.
+   * @returns JavaScript accepted by the selected evaluator, or its pending result.
    */
-  stripTypes(program: string): string
+  stripTypes(program: string, signal: AbortSignal): string | Promise<string>
 }
 
 /**
@@ -35,7 +35,8 @@ export interface ExecutionMode {
  * @returns Mode selection and temporary or retained execution through one process implementation.
  */
 export function createExecution(ctx: Context, config: ResolvedConfig, processes: PolicyProcesses): NodeExecution {
-  return new NodeExecution(ctx, config, processes, resolveMode(config))
+  const stripper = resolveTypeStripper(config.maxTimeoutMs, config.maxOutputBytes)
+  return new NodeExecution(ctx, config, processes, resolveMode(config, (source, signal) => stripper.strip(source, signal)), stripper)
 }
 
 /** Temporary processes and optional object-owned reuse share one process implementation. */
@@ -49,10 +50,12 @@ class NodeExecution {
    * @param config - Validated limits and selected executable.
    * @param processes - Provider-owned policy invalidation and cleanup.
    * @param mode - Program syntax and TypeScript erasure.
+   * @param stripper - Synchronous initializer stripping and idle worker ownership.
    */
   constructor(
     private readonly ctx: Context, private readonly config: ResolvedConfig,
     private readonly processes: PolicyProcesses, readonly mode: ExecutionMode,
+    private readonly stripper: ReturnType<typeof resolveTypeStripper>,
   ) {}
 
   /** Stop every owned process, retaining failed cleanup for a later retry. */
@@ -61,8 +64,18 @@ class NodeExecution {
       await worker.dispose()
       this.workers.delete(worker)
     }))
+    await this.stripper.dispose?.()
     const failed = results.find(result => result.status === 'rejected')
     if (failed?.status === 'rejected') throw failed.reason
+  }
+
+  /**
+   * Erase an initializer before registration commits.
+   * @param program - Initializer source in persistent REPL syntax.
+   * @returns JavaScript for the new retained environment.
+   */
+  stripInitializer(program: string): string {
+    return this.stripper.stripInitializer(program)
   }
 
   /**
@@ -140,36 +153,7 @@ function scopedReplMode(outputInstructions: string, stripTypeScript: ExecutionMo
   }
 }
 
-/** The package Node strips TypeScript with, for a Host whose runtime omits the `node:module` API. */
-function amaroStripper(): (program: string) => string {
-  let transformSync: typeof import('amaro').transformSync
-  try {
-    // Loading compiles the WASM module once; every later call stays in this process.
-    const amaro = nodeModule.createRequire(import.meta.url)('amaro') as typeof import('amaro')
-    transformSync = amaro.transformSync
-  } catch (error) {
-    throw new Error(`ptc-runtime-node: this Host requires the amaro package, an optional peer dependency, for TypeScript stripping: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
-  }
-  return (program) => {
-    try {
-      return transformSync(program).code
-    } catch (error) {
-      // amaro raises a plain failure object where Node raises a SyntaxError with the same message.
-      if (error instanceof Error) throw error
-      const { message } = (error ?? {}) as { message?: unknown }
-      throw new SyntaxError(typeof message === 'string' ? message : String(error), { cause: error })
-    }
-  }
-}
-
-function resolveTypeStripper(): (program: string) => string {
-  if (typeof nodeModule.stripTypeScriptTypes === 'function') return nodeModule.stripTypeScriptTypes
-  return amaroStripper()
-}
-
-function resolveMode(config: ResolvedConfig): ExecutionMode {
-  const stripTypeScriptTypes = resolveTypeStripper()
-  const stripTypeScript = (source: string) => quietRuntimeCall(() => stripTypeScriptTypes(source))
+function resolveMode(config: ResolvedConfig, stripTypeScript: ExecutionMode['stripTypes']): ExecutionMode {
   const freshProcess = config.launch.kind === 'bun-script' ? 'Each call runs in a fresh Bun process.' : 'Each call runs in a fresh Node process.'
   const outputInstructions = 'Use inspect(...values) to display output. Do not use console.'
     + ' Use the raw form of a template literal only for short text whose backslashes must stay exactly as written, such as a regular expression;'
@@ -180,9 +164,10 @@ function resolveMode(config: ResolvedConfig): ExecutionMode {
       format: 'function-body',
       retainsState: false,
       executionInstructions: 'The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. ' + outputInstructions + ' ' + freshProcess + ' Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution\'s sandbox policy.',
-      stripTypes(program) {
-        const stripped = stripTypeScript(STRIP_PREFIX + program + STRIP_SUFFIX)
-        return stripped.slice(STRIP_PREFIX.length, stripped.length - STRIP_SUFFIX.length)
+      stripTypes(program, signal) {
+        const stripped = stripTypeScript(STRIP_PREFIX + program + STRIP_SUFFIX, signal)
+        const unwrap = (code: string): string => code.slice(STRIP_PREFIX.length, code.length - STRIP_SUFFIX.length)
+        return typeof stripped === 'string' ? unwrap(stripped) : stripped.then(unwrap)
       },
     }
     case 'persistent-in-memory': return config.replScoped ? scopedReplMode(outputInstructions, stripTypeScript) : {

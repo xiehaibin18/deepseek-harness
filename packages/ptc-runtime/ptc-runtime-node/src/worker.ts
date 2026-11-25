@@ -20,6 +20,7 @@ import { decodePtcJsonWire, type PtcImageWire } from './json-wire.ts'
 import { OutputLedger } from './output-ledger.ts'
 import { drainOutput, terminateProcess } from './output-stream.ts'
 import { readProgramResult, PROGRAM_PROTOCOL_VERSION, type ProgramBootData, type ProgramMethods, type HostMethods } from './protocol.ts'
+import { StripTimeoutError } from './type-stripper.ts'
 
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
@@ -32,6 +33,8 @@ interface Evaluation {
   invoke: typeof invokeBinding
   pending: number
   pendingBytes: number
+  finished: Promise<PtcRunResult>
+  canDispatch(): boolean
   admit(entry: PtcOutput): void
   truncateOutput(): void
   finish(error?: PtcRunFailure, value?: PtcJsonValue, discard?: boolean): void
@@ -122,17 +125,30 @@ export class ProgramWorker {
     this.stderr = ''
     const output: PtcOutput[] = []
     const result = Promise.withResolvers<PtcRunResult>()
-    const timer = spec.timeoutMs === null ? undefined : setTimeout(() => {
+    const strippingController = new AbortController()
+    let stripping: Promise<string> | undefined
+    const timeoutMs = spec.timeoutMs
+    const deadline = timeoutMs === null ? undefined : performance.now() + timeoutMs
+    const onTimeout = (budget: number): void => {
       const phase = evaluation.completion !== undefined ? 'during execution' : 'before code started'
-      const message = `execution timed out ${phase} (${spec.timeoutMs}ms)`
-      evaluation.finish({ kind: 'timeout', message }, undefined, evaluation.completion === undefined)
-    }, spec.timeoutMs)
+      const message = `execution timed out ${phase} (${budget}ms)`
+      evaluation.finish({ kind: 'timeout', message }, undefined, !this.ready)
+    }
+    const timer = timeoutMs === null ? undefined : setTimeout(() => { onTimeout(timeoutMs) }, timeoutMs)
     const onAbort = (): void => {
-      evaluation.finish({ kind: 'abort', message: this.retainsState ? 'execution canceled' : messageOf(spec.signal?.reason) }, undefined, evaluation.completion === undefined)
+      evaluation.finish({ kind: 'abort', message: this.retainsState ? 'execution canceled' : messageOf(spec.signal?.reason) }, undefined, !this.ready)
     }
     const evaluation: Evaluation = {
       settled: false,
       completion: undefined,
+      finished: result.promise,
+      canDispatch: () => {
+        if (evaluation.settled) return false
+        if (spec.signal?.aborted) onAbort()
+        else if (deadline !== undefined && timeoutMs !== null && performance.now() >= deadline) onTimeout(timeoutMs)
+        else return true
+        return false
+      },
       data: {
         code: '', programFormat: this.mode.format, retainsState: this.retainsState,
         ...this.pendingInitialization === undefined ? {} : { initialization: this.pendingInitialization },
@@ -163,12 +179,15 @@ export class ProgramWorker {
         evaluation.settled = true
         clearTimeout(timer)
         spec.signal?.removeEventListener('abort', onAbort)
+        strippingController.abort()
         const initializationIncomplete = this.pendingInitialization !== undefined
         if (initializationIncomplete && error?.kind === 'exception') error = { ...error, message: this.message(error.message) }
         const cleanup = async (): Promise<PtcRunResult> => {
+          // Completion owns the stripping thread until it has stopped or returned to the idle pool.
+          if (stripping !== undefined) await stripping.catch(() => {})
           const interrupted = error?.kind === 'timeout' || error?.kind === 'abort'
           let preserved = this.retainsState && !initializationIncomplete && !discard
-          if (preserved && interrupted) preserved = await this.interruptEvaluation(evaluation)
+          if (preserved && interrupted && evaluation.completion !== undefined) preserved = await this.interruptEvaluation(evaluation)
           let drained = true
           if (!preserved) drained = await this.terminate()
           if (interrupted && this.retainsState && error) {
@@ -188,20 +207,28 @@ export class ProgramWorker {
     }
     this.active = evaluation
     spec.signal?.addEventListener('abort', onAbort, { once: true })
-    if (spec.signal?.aborted) onAbort()
-    else {
-      try {
-        evaluation.data.code = this.mode.stripTypes(spec.program)
-      } catch (error: unknown) {
-        // A parse failure before startup has no process state or authority to retain.
-        evaluation.finish({ kind: 'exception', message: messageOf(error) }, undefined, !this.ready)
-        return await result.promise
-      }
-      if (this.ready) this.dispatch(evaluation)
+    if (!evaluation.canDispatch()) return await result.promise
+    try {
+      const code = this.mode.stripTypes(spec.program, strippingController.signal)
+      if (typeof code === 'string') evaluation.data.code = code
       else {
-        this.starting = this.start(spec.cwd)
-        void this.starting.catch((error: unknown) => { this.fail(error instanceof SandboxUnavailableError || (this.confined !== undefined && isRunnerSpawnFailure(error, this.confined.argv[0], spec.cwd)) ? 'sandbox-unavailable' : 'worker-exit', messageOf(error)) })
+        stripping = code
+        evaluation.data.code = await stripping
       }
+    } catch (error: unknown) {
+      if (evaluation.canDispatch()) {
+        if (error instanceof StripTimeoutError) onTimeout(this.config.maxTimeoutMs)
+        else evaluation.finish({ kind: 'exception', message: messageOf(error) }, undefined, !this.ready)
+      }
+      return await result.promise
+    } finally {
+      stripping = undefined
+    }
+    if (!evaluation.canDispatch()) return await result.promise
+    if (this.ready) this.dispatch(evaluation)
+    else {
+      this.starting = this.start(evaluation)
+      void this.starting.catch((error: unknown) => { this.fail(error instanceof SandboxUnavailableError || (this.confined !== undefined && isRunnerSpawnFailure(error, this.confined.argv[0], spec.cwd)) ? 'sandbox-unavailable' : 'worker-exit', messageOf(error)) })
     }
     return await result.promise
   }
@@ -229,8 +256,9 @@ export class ProgramWorker {
 
   /** Cancel active work and await managed process termination and output drainage. */
   async dispose(): Promise<void> {
-    this.active?.finish({ kind: 'abort', message: 'PTC environment disposed' }, undefined, true)
-    await this.terminate()
+    const evaluation = this.active
+    evaluation?.finish({ kind: 'abort', message: 'PTC environment disposed' }, undefined, true)
+    try { await this.terminate() } finally { await evaluation?.finished }
   }
 
   /** Terminate the process; resolve to whether its output pipes drained cleanly. */
@@ -296,9 +324,10 @@ export class ProgramWorker {
     return { kind: 'image', id, attachmentId: image.attachment.attachmentId, path: image.path, width: image.attachment.width, height: image.attachment.height }
   }
 
-  private async start(cwd: string): Promise<void> {
+  private async start(evaluation: Evaluation): Promise<void> {
+    const { cwd } = evaluation.spec
     const executable = await this.ctx.subprocess.resolveExecutable(this.config.launch.executable, undefined, this.controller.signal)
-    if (this.closed) return
+    if (!evaluation.canDispatch()) return
     const packaged = this.config.launch.kind === 'embedded'
     const heapFlag = `--max-old-space-size=${this.config.maxOldGenerationSizeMb}`
     const nodeScript = this.config.launch.kind === 'node-script'
@@ -306,8 +335,7 @@ export class ProgramWorker {
       ...bootstrapArgs(this.ctx.fs, this.config.launch, this.config.maxMessageBytes)]
     const policy = this.policy
     this.confined = policy.mode === 'danger-full-access' ? undefined : await this.ctx.sandbox.confine(argv, { ...policy, mode: policy.mode }, this.controller.signal)
-    // oxlint-disable-next-line typescript/no-unnecessary-condition -- Confinement may yield while disposal closes the process.
-    if (this.closed) return
+    if (!evaluation.canDispatch()) return
     const env: NodeJS.ProcessEnv = Object.fromEntries(Object.keys(process.env)
       .filter(key => !STARTUP_ENVIRONMENT_NAMES.has(key.toUpperCase()) && key.toUpperCase() !== 'ELECTRON_RUN_AS_NODE')
       .map(key => [key, undefined]))
@@ -335,6 +363,7 @@ export class ProgramWorker {
           return
         }
         if (this.ready || !this.active) { this.fail('protocol', 'duplicate program readiness'); return }
+        if (!this.active.canDispatch()) return
         this.ready = true
         this.dispatch(this.active)
       },

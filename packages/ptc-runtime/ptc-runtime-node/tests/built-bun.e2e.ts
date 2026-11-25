@@ -11,10 +11,10 @@ const pkgDir = fileURLToPath(new URL('..', import.meta.url))
 const built = ['lib/index.js', 'lib/process.js'].every(file => existsSync(join(pkgDir, file)))
 
 /** A valid program whose bytes exceed the default output buffer of a child process. */
-function largeProgram(): string {
+function largeProgram(completion = 'return value0'): string {
   let program = ''
   for (let index = 0; program.length < 2 * 1024 * 1024; index++) program += `const value${index}: number = ${index}\n`
-  return `${program}return value0`
+  return program + completion
 }
 
 describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('built Bun PTC runtime', () => {
@@ -88,7 +88,7 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
   }, 60_000)
 
   /** Boot a Bun Host that strips and runs the program file in per-call mode with `config`. */
-  function stripScript(programPath: string, root: string, config: object): string {
+  function stripScript(programPath: string, root: string, config: object, evaluate = 'console.log(JSON.stringify(await run(program)))'): string {
     return [
       "const { Context } = await import('@deepseek-ai/cordis')",
       "const { NodePtcRuntime } = await import('@deepseek-ai/dsh-ptc-runtime-node')",
@@ -100,8 +100,9 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
       '  }',
       "  await ctx.plugin((await import('@deepseek-ai/dsh-sandbox-policy')).default, " + JSON.stringify({ mode: 'read-only', workspaceRoot: root }) + ')',
       '  await ctx.plugin(NodePtcRuntime, ' + JSON.stringify({ executionMode: 'per-call', ...config }) + ')',
-      '  const outcome = await ctx.ptcRuntime.run(ctx.ptcRuntime.resolve({ program, bindings: [], cwd: ' + JSON.stringify(root) + ', stateOwner: {} }))',
-      '  console.log(JSON.stringify(outcome))',
+      '  const stateOwner = {}',
+      '  const run = (program, options = {}) => ctx.ptcRuntime.run(ctx.ptcRuntime.resolve({ program, bindings: [], cwd: ' + JSON.stringify(root) + ', stateOwner, ...options }))',
+      evaluate,
       '} finally { await ctx.fiber.dispose() }',
     ].join('\n')
   }
@@ -142,5 +143,56 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
     const outcome = await strip(root, 'enum Color { Red }\nreturn Color.Red')
     expect(outcome.value).toBeUndefined()
     expect(outcome.error).toMatchObject({ kind: 'exception', message: 'TypeScript enum is not supported in strip-only mode' })
+  }, 60_000)
+
+  async function exerciseStrip(program: string, config: object, evaluate: string): Promise<unknown> {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-bun-strip-'))
+    onTestFinished(async () => { await rm(root, { recursive: true, force: true }) })
+    const programPath = join(root, 'program.ts')
+    await writeFile(programPath, program)
+    const script = stripScript(programPath, root, { ...config, launch: { kind: 'bun-script', executable: bun } }, evaluate)
+    const result = await host(root, script)
+    expect(result.exitCode, result.stderr).toBe(0)
+    return JSON.parse(result.stdout)
+  }
+
+  it('bounds type stripping even when the program has no execution deadline', async () => {
+    const result = await exerciseStrip(largeProgram(), { maxTimeoutMs: 1 },
+      'console.log(JSON.stringify(await run(program, { timeoutMs: null })))')
+    expect(result).toMatchObject({ error: { kind: 'timeout' } })
+  }, 60_000)
+
+  it.each(['abort', 'timeout'] as const)('handles %s before a retained worker receives the program and accepts the next call', async (kind) => {
+    const result = await exerciseStrip(largeProgram('enum Color { Red }'), { executionMode: 'persistent-in-memory' }, `
+      const warm = await run('const previous: number = 41; previous')
+      const controller = new AbortController()
+      const options = ${JSON.stringify(kind)} === 'abort' ? { signal: controller.signal } : { timeoutMs: 1 }
+      const pending = run(program, options)
+      const otherOwner = run('6 * 7', { stateOwner: {} })
+      if (options.signal) setTimeout(() => controller.abort(), 0)
+      const [interrupted, other] = await Promise.all([pending, otherOwner])
+      const next = await run('previous + 1')
+      console.log(JSON.stringify({ warm, interrupted, other, next }))
+    `)
+    expect(result).toMatchObject({ warm: { value: 41 }, interrupted: { error: { kind } }, other: { value: 42 }, next: { value: 42 } })
+  }, 60_000)
+
+  it('reports initializer syntax errors at registration and runs a corrected initializer', async () => {
+    const result = await exerciseStrip('const answer: number = 42', { executionMode: 'persistent-in-memory' }, `
+      let message
+      try { ctx.ptcRuntime.registerEnvironmentInitializer('enum Color { Red }') } catch (failure) { message = failure.message }
+      const dispose = ctx.ptcRuntime.registerEnvironmentInitializer(program)
+      try { console.log(JSON.stringify({ message, outcome: await run('answer') })) } finally { await dispose() }
+    `)
+    expect(result).toMatchObject({ message: 'TypeScript enum is not supported in strip-only mode', outcome: { value: 42 } })
+  }, 60_000)
+
+  it('bounds type stripping during synchronous initializer registration', async () => {
+    const result = await exerciseStrip(largeProgram('value0'), { executionMode: 'persistent-in-memory', maxTimeoutMs: 1 }, `
+      let message
+      try { ctx.ptcRuntime.registerEnvironmentInitializer(program) } catch (failure) { message = failure.message }
+      console.log(JSON.stringify({ message }))
+    `)
+    expect(result).toEqual({ message: 'PTC TypeScript initializer stripping timed out (1ms)' })
   }, 60_000)
 })
