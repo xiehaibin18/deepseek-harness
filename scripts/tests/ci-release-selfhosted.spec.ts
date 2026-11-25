@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, matchesGlob, resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { load } from 'js-yaml'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -21,7 +21,7 @@ interface Step {
   with?: Record<string, unknown>
 }
 interface Workflow {
-  on: Record<string, unknown>
+  on: Record<string, unknown> & { pull_request?: { paths?: string[] } | null }
   permissions: Record<string, string>
   concurrency?: Record<string, unknown>
   jobs: Record<string, {
@@ -103,7 +103,14 @@ for (const [file, jobIds] of [['release.yml', ['dependencies', 'pack']], ['relea
     const release = workflow(file)
     it('preserves the logical jobs, rehearsal events and read-only permission', () => {
       expect(Object.keys(release.jobs)).toEqual(jobIds)
-      expect(release.on).toEqual({ pull_request: null, push: { branches: ['master'] }, workflow_dispatch: null })
+      const paths = release.on.pull_request?.paths ?? []
+      expect(release.on).toEqual({ pull_request: { paths }, push: { branches: ['master'], paths }, workflow_dispatch: null })
+      const matches = (path: string) => paths.some(pattern => matchesGlob(path, pattern))
+      expect(matches(`.github/workflows/${file}`)).toBe(true)
+      expect(matches('scripts/release/check.ts')).toBe(true)
+      expect(matches('vendor/cordis/src/index.ts')).toBe(file === 'release-vendor.yml')
+      expect(matches('packages/ptc-runtime/ptc-runtime-node/src/index.ts')).toBe(false)
+      expect(matches('pnpm-lock.yaml')).toBe(false)
       expect(release.permissions).toEqual({ contents: 'read' })
       expect(release.concurrency).toEqual({ group: '${{ github.workflow }}-${{ github.ref }}', 'cancel-in-progress': true })
     })
