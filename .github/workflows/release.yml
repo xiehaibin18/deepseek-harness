@@ -2,15 +2,28 @@
 # entries, all on one version. The vendored framework and the native packages are
 # separate sequences with their own workflows and version lines.
 #
-# Pack and dependency-layout verification run without credentials on every pull
-# request and master push. Publication is a manual workflow_dispatch of
+# Packaging inputs trigger credential-free rehearsals on pull requests and master pushes. Publication is a manual workflow_dispatch of
 # release-publish.yml from a dsh-v* tag.
 name: Release (dsh)
 
 on:
   pull_request:
+    paths:
+      - 'scripts/release/**'
+      - 'scripts/release*.ts'
+      - 'scripts/verify-package-dependencies*.ts'
+      - 'scripts/verify-npm-install-layout*.ts'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-publish.yml'
   push:
     branches: [master]
+    paths:
+      - 'scripts/release/**'
+      - 'scripts/release*.ts'
+      - 'scripts/verify-package-dependencies*.ts'
+      - 'scripts/verify-npm-install-layout*.ts'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-publish.yml'
   workflow_dispatch:
 
 permissions:

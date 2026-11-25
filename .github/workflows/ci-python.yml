@@ -8,6 +8,16 @@ name: CI Python
 # checks passed".
 on:
   pull_request:
+    paths:
+      - 'python/**'
+      - 'packages/sdk/**'
+      - 'packages/core/agent-loop/**'
+      - 'packages/core/session/**'
+      - 'scripts/*python*'
+      - 'scripts/primary-runtime/**'
+      - '.github/review-ownership/**'
+      - '.github/workflows/ci-python.yml'
+      - '.github/workflows/build-exe-for-python-sdk.yml'
 permissions:
   contents: read
 

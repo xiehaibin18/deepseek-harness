@@ -2,7 +2,7 @@
 # vendor/, each on its own version line. This sequence releases independently of
 # dsh and of the native packages.
 #
-# Pack runs without credentials on every pull request and master push.
+# Vendor and packaging inputs trigger credential-free rehearsals on pull requests and master pushes.
 # Publication is a manual workflow_dispatch of release-vendor-publish.yml from a
 # vendor-* tag; a vendor release can carry several versions, so each package has
 # its own tag.
@@ -10,8 +10,18 @@ name: Release (vendor)
 
 on:
   pull_request:
+    paths:
+      - 'vendor/**'
+      - 'scripts/release/**'
+      - '.github/workflows/release-vendor.yml'
+      - '.github/workflows/release-vendor-publish.yml'
   push:
     branches: [master]
+    paths:
+      - 'vendor/**'
+      - 'scripts/release/**'
+      - '.github/workflows/release-vendor.yml'
+      - '.github/workflows/release-vendor-publish.yml'
   workflow_dispatch:
 
 permissions:
