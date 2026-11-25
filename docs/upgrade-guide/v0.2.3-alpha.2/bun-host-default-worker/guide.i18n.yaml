@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.3-alpha.2/bun-host-default-worker/guide.md
+/:
+  en: 2653b13f53637bc5
+  zh: 4bc1941ffdb1df64
+/a-bun-web-host-starts-a-bun-ptc-worker-by-default:
+  en: 1b0465d1e6bf0b2c
+  zh: 55bbdda029fc6d5b
+/a-bun-web-host-starts-a-bun-ptc-worker-by-default/change:
+  en: 662c92a903fcf8fa
+  zh: 4a5d2185466469f5
+/a-bun-web-host-starts-a-bun-ptc-worker-by-default/migration:
+  en: bd2e2618bb072079
+  zh: 5e04e9eea82f392c

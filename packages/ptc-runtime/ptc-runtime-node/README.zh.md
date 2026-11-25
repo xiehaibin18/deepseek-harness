@@ -166,7 +166,7 @@ Host 通过有序控制管道上的 birpc 调用子进程的 `run()`。同一时
 
 自定义 `launch.bootstrapPath` 部署必须使用 bootstrap 协议 5。`HostMethods.invoke` 的回复包含 `{ value: flatWire, inspection?: string }`；可选文本与解码后的对象或数组关联，供直接展示使用。请与宿主一起部署匹配的 bootstrap；[展示指南](../../../docs/upgrade-guide/v0.2.2-rc.3/ptc-tool-result-inspection/guide.zh.md)说明绑定回复，[输出截断指南](../../../docs/upgrade-guide/v0.2.2-rc.3/ptc-output-limit/guide.zh.md)说明输出抑制。声明协议 3 或 4 的 bootstrap 会在程序分发前被拒绝。
 
-在 macOS 上，显式选择的 `bun-script` 子进程用 Bun 运行同一套 bootstrap 和控制协议。沙箱拒绝、一次性放宽的策略、策略变更后的进程替换，以及中断后保留变量的去留，都与 Node 子进程遵循相同的规则。Bun Host 用 `amaro` 擦除 TypeScript 类型，因此 `bun-script` 子进程可以在没有安装 Node 的环境中运行。`amaro` 是可选的对等依赖，由这类 Host 自行提供；Node 运行时发布包不携带它。在 Bun Host 上，`DSP_NODE_EXECUTABLE` 指定默认 `node-script` 子进程使用的 Node 可执行文件。Bun 子进程会清空启动环境，并在启动时忽略工作区的 Bun 配置、TS 配置和 dotenv 文件。默认搜索路径之外的嵌套可执行文件须使用绝对路径。执行进程专用的导入钩子和 V8 堆上限适用于 Node 子进程。
+在 macOS 上，Bun Host 用运行 Host 的 Bun 可执行文件以 `bun-script` 启动默认子进程，因此子进程不需要安装 Node；它用 Bun 运行同一套 bootstrap 和控制协议。沙箱拒绝、一次性放宽的策略、策略变更后的进程替换，以及中断后保留变量的去留，都与 Node 子进程遵循相同的规则。Bun Host 用 `amaro` 擦除 TypeScript 类型。`amaro` 是可选的对等依赖，由这类 Host 自行提供；Node 运行时发布包不携带它。要在 Bun Host 上使用 Node 子进程，请在 `launch` 中选择 `kind: node-script` 并指定 Node 的 `executable`。Bun 子进程会清空启动环境，并在启动时忽略工作区的 Bun 配置、TS 配置和 dotenv 文件。默认搜索路径之外的嵌套可执行文件须使用绝对路径。执行进程专用的导入钩子和 V8 堆上限适用于 Node 子进程。
 
 Bun Host 在单独的线程中擦除程序的类型。这段时间计入本次运行的时限，即使调用方设置了 `timeoutMs: null`，擦除仍受 `maxTimeoutMs` 限制。如果调用在程序发给子进程前超时或被取消，程序不会执行，已经初始化并保留的环境会保留原有变量。注册环境初始化器时会同步检查语法，也受 `maxTimeoutMs` 限制。
 

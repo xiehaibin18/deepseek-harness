@@ -25,18 +25,25 @@ export type LaunchConfig = {
  * @returns the worker invocation without guessing from the execution world's paths.
  */
 export function resolveLaunch(config?: LaunchConfig): LaunchConfig {
-  const executable = config?.executable
-    ?? (process.versions.bun === undefined ? process.execPath : process.env.DSP_NODE_EXECUTABLE)
-  if (executable === undefined) throw new Error('ptc-runtime-node: Bun Web Host requires DSP_NODE_EXECUTABLE for the default node-script worker')
-  const launch: LaunchConfig = config ?? { kind: 'pkg' in process ? 'embedded' : 'node-script', executable }
+  const launch: LaunchConfig = config ?? defaultLaunch()
   if (launch.executable.length === 0) throw new Error('ptc-runtime-node: launch.executable must be non-empty')
   if (launch.kind === 'bun-script' && process.platform !== 'darwin') {
-    throw new Error('ptc-runtime-node: bun-script requires a macOS host')
+    throw new Error('ptc-runtime-node: bun-script requires a macOS host; select a node-script launch elsewhere')
   }
   if (launch.kind !== 'embedded' && launch.bootstrapPath !== undefined && !isAbsolute(launch.bootstrapPath)) {
     throw new Error('ptc-runtime-node: launch.bootstrapPath must be absolute')
   }
   return launch
+}
+
+/**
+ * Name the worker an omitted `launch` selects: the embedded worker of a packaged executable, else a script worker
+ * started with the runtime that runs this Host.
+ * @returns The worker invocation for this Host's own runtime.
+ */
+function defaultLaunch(): LaunchConfig {
+  if ('pkg' in process) return { kind: 'embedded', executable: process.execPath }
+  return { kind: process.versions.bun === undefined ? 'node-script' : 'bun-script', executable: process.execPath }
 }
 
 /**

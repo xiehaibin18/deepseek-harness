@@ -20,9 +20,9 @@ function largeProgram(completion = 'return value0'): string {
 describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('built Bun PTC runtime', () => {
   /**
    * Run a Host script under Bun with its home and temporary directory inside `root`.
-   * @param node - Node worker executable offered through the environment; `null` leaves the Host without any Node.
+   * @param path - Directory to put before `PATH`; omitted leaves the Host without any Node executable.
    */
-  async function host(root: string, script: string, { node = process.execPath }: { node?: string | null } = {}) {
+  async function host(root: string, script: string, { path }: { path?: string } = {}) {
     return execa(bun ?? 'bun', ['--config=/dev/null', '--tsconfig-override=/dev/null', '--no-env-file', '--no-install', '-e', script], {
       cwd: pkgDir,
       extendEnv: false,
@@ -31,8 +31,7 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
         TMPDIR: root,
         DSH_HOME: join(root, 'dsh'),
         DSH_AGENTS_HOME: join(root, 'agents'),
-        PATH: '/usr/bin:/bin',
-        ...(node === null ? {} : { DSP_NODE_EXECUTABLE: node, PATH: dirname(node) + ':/usr/bin:/bin' }),
+        PATH: (path === undefined ? '' : path + ':') + '/usr/bin:/bin',
       },
       stdin: 'ignore',
       timeout: 55_000,
@@ -41,7 +40,7 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
     })
   }
 
-  it.each(['persistent-in-memory', 'per-call', 'vm-script'] as const)('executes %s with a Bun worker and workspace-relative imports', async (mode) => {
+  it.each(['persistent-in-memory', 'per-call', 'vm-script'] as const)('executes %s with the default Bun worker and no Node executable', async (mode) => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-bun-ptc-'))
     onTestFinished(async () => { await rm(root, { recursive: true, force: true }) })
     const first = join(root, 'first')
@@ -67,7 +66,7 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
       "    await ctx.plugin((await import('@deepseek-ai/dsh-' + name)).default, {})",
       '  }',
       "  await ctx.plugin((await import('@deepseek-ai/dsh-sandbox-policy')).default, " + JSON.stringify({ mode: 'read-only', workspaceRoot: root }) + ')',
-      '  await ctx.plugin(NodePtcRuntime, ' + JSON.stringify({ executionMode: mode, launch: { kind: 'bun-script', executable: bun } }) + ')',
+      '  await ctx.plugin(NodePtcRuntime, ' + JSON.stringify({ executionMode: mode }) + ')',
       '  const stateOwner = {}',
       '  const run = (program, cwd) => ctx.ptcRuntime.run(ctx.ptcRuntime.resolve({ program, bindings: [], cwd, stateOwner }))',
       '  const first = await run(' + JSON.stringify(program1) + ', ' + JSON.stringify(first) + ')',
@@ -108,7 +107,7 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
   }
 
   /** Run one program through a Bun Host and return its outcome. */
-  async function strip(root: string, program: string, config: object = {}, hostOptions: { node?: string | null } = {}) {
+  async function strip(root: string, program: string, config: object = {}, hostOptions: { path?: string } = {}) {
     const programPath = join(root, 'program.ts')
     await writeFile(programPath, program)
     const result = await host(root, stripScript(programPath, root, config), hostOptions)
@@ -129,12 +128,24 @@ describe.skipIf(process.platform !== 'darwin' || bun === undefined || !built)('b
     expect(outcome.value).toBe(value)
   }, 60_000)
 
-  it('strips in-process when no Node executable exists for the Host or the worker', async () => {
+  it('starts a Node worker only when launch selects it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-bun-strip-'))
     onTestFinished(async () => { await rm(root, { recursive: true, force: true }) })
-    const outcome = await strip(root, 'const answer: number = 41\nreturn answer + 1', { launch: { kind: 'bun-script', executable: bun } }, { node: null })
+    const outcome = await strip(root, 'const answer: number = 41\nreturn { runtime: typeof process.versions.bun, answer: answer + 1 }',
+      { launch: { kind: 'node-script', executable: process.execPath } }, { path: dirname(process.execPath) })
     expect(outcome.error).toBeUndefined()
-    expect(outcome.value).toBe(42)
+    expect(outcome.value).toEqual({ runtime: 'undefined', answer: 42 })
+  }, 60_000)
+
+  it('rejects a worker executable that is empty', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-bun-strip-'))
+    onTestFinished(async () => { await rm(root, { recursive: true, force: true }) })
+    const programPath = join(root, 'program.ts')
+    await writeFile(programPath, 'return 1')
+    const result = await host(root, stripScript(programPath, root, { launch: { kind: 'bun-script', executable: '' } }))
+    expect(result.timedOut).toBe(false)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('ptc-runtime-node: launch.executable must be non-empty')
   }, 60_000)
 
   it('reports TypeScript outside the erasable subset as an exception', async () => {

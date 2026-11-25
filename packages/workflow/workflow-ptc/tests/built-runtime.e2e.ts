@@ -19,7 +19,7 @@ const launches = [
   { runtime: 'Node', host: process.execPath, config: {} },
   ...bun === undefined ? [] : [{
     runtime: 'Bun', host: bun,
-    config: { executionMode: 'persistent-in-memory', launch: { kind: 'bun-script', executable: bun } },
+    config: { executionMode: 'persistent-in-memory' },
   }],
 ]
 
@@ -87,7 +87,7 @@ try {
         cwd: packageRoot, timeout: 60_000,
         env: {
           HOME: root, TMPDIR: root, DSH_HOME: join(root, 'dsh'), DSH_AGENTS_HOME: join(root, 'agents'),
-          DSP_NODE_EXECUTABLE: process.execPath, PATH: dirname(process.execPath) + ':/usr/bin:/bin',
+          PATH: runtime === 'Bun' ? '/usr/bin:/bin' : dirname(process.execPath) + ':/usr/bin:/bin',
         },
       })
       expect(stdout).toContain('built-runtime-smoke-ok')
