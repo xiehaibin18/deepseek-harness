@@ -14,11 +14,11 @@ const packages = new Map(scopes.flatMap(scope => [...(scope === 'ptc' ? ptc : we
 const dirs = new Set([...packages.values(), 'packages/typert/generator'])
 const root = process.cwd()
 const env = clientBuildProcessEnvironment(process.env, repositoryClientBuildEnvironment(root, process.env))
-function pnpm(args) {
-  execFileSync('pnpm', args, { stdio: 'inherit', env })
+function bunRun(args) {
+  execFileSync('bun', ['run', ...args], { stdio: 'inherit', env })
 }
 
-pnpm(['run', 'build:native-system'])
+bunRun(['build:native-system'])
 const generator = new WorkspaceTypertGenerator(root, { checkDiagnostics: false, rejectBuildOutputs: true })
 const contributors = generator.discover(['host'], pkg => packages.has(pkg.name) && hasTypertExport(pkg.exports))
 if (contributors.length) writeWorkspaceArtifacts(root, generator.generate(contributors.map(pkg => pkg.package), ['host']))
@@ -39,7 +39,7 @@ for (const face of scopes.includes('web') ? ['host', 'client'] : ['host']) {
   const workspaces = [...new Set([...projects].map(path => path.endsWith('.json') ? dirname(path) : path))]
     .filter(path => path !== 'apps/web')
   console.log('DSP ' + face + ' workspaces (' + workspaces.length + '): ' + workspaces.join(' '))
-  pnpm(['exec', 'tsc', '-b', ...projects])
+  bunRun(['tsc', '-b', ...projects])
   execFileSync(process.execPath, ['.github/dsp-ci/bundle.mjs', face, ...workspaces], { stdio: 'inherit', env })
 }
-if (scopes.includes('web')) pnpm(['run', 'build:web'])
+if (scopes.includes('web')) bunRun(['--filter', '@deepseek-ai/dsh-web-frontend', 'build'])

@@ -22,7 +22,7 @@ import {
 } from './client-build-environment.ts'
 import { aggregateBuildArgs, aggregateCheckArgs, contractSteps, libraryBuildSteps } from './compile-referenced-projects.ts'
 import type { LibraryStep } from './compile-referenced-projects.ts'
-import { pnpmCommand } from './release/process.ts'
+import { workspaceRunnerInvocation } from './pnpm-invocation.ts'
 import { defaultParallelism, describeDefaultParallelism } from './parallelism.ts'
 import { runAggregate } from './run-gates.ts'
 import type { Gate } from './run-gates.ts'
@@ -99,7 +99,7 @@ export function buildGates(
     for (const step of libraryBuildSteps(root, 'all')) {
       gates.push(libraryGate(step, step.id === 'host-src' ? ['native', ...step.needs] : step.needs, env))
     }
-    gates.push(pnpmGate('web', 'Web build', ['run', 'build:web'], ['client-bundle'], env))
+    gates.push(pnpmGate('web', 'Web build', ['--filter', '@deepseek-ai/dsh-web-frontend', 'run', 'build'], ['client-bundle'], env))
   }
   if (scope === 'typecheck') {
     for (const step of contractSteps(root, 'all')) gates.push(libraryGate(step, step.needs, env))
@@ -145,8 +145,16 @@ function pnpmGate(
   needs: readonly string[],
   env: Record<string, string | undefined>,
 ): Gate {
-  const [command, ...prefix] = pnpmCommand()
-  return { id, label, displayCommand: `pnpm ${args.join(' ')}`, command, args: [...prefix, ...args], needs: [...needs], env }
+  const invocation = workspaceRunnerInvocation(args)
+  return {
+    id,
+    label,
+    displayCommand: invocation.displayCommand,
+    command: invocation.command,
+    args: invocation.args,
+    needs: [...needs],
+    env,
+  }
 }
 
 /**

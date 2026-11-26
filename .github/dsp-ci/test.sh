@@ -30,10 +30,10 @@ case "${1:?expected ptc or web}" in
   *) exit 2 ;;
 esac
 
-node .github/dsp-ci/typecheck.mjs "${unit[@]}" "${e2e[@]}" "${type_inputs[@]}"
-pnpm exec vitest run --maxWorkers=1 "${unit[@]}"
-pnpm run test:e2e --maxWorkers=1 "${e2e[@]}"
+bun .github/dsp-ci/typecheck.mjs "${unit[@]}" "${e2e[@]}" "${type_inputs[@]}"
+bun run vitest run --maxWorkers=1 "${unit[@]}"
+bun run test:e2e --maxWorkers=1 "${e2e[@]}"
 if [[ $1 == web ]]; then
-  DSH_EXAMPLE_MODE=lib pnpm run test:expected --maxWorkers=1 "$web_snapshot"
-  node .github/dsp-ci/bun-web.mjs
+  DSH_EXAMPLE_MODE=lib bun run test:expected --maxWorkers=1 "$web_snapshot"
+  bun .github/dsp-ci/bun-web.mjs
 fi

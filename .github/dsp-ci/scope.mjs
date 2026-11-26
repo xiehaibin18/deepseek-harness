@@ -40,7 +40,7 @@ export function selectScopes(paths) {
   const selected = new Set()
   let lock = false
   for (const path of paths) {
-    if (path === 'pnpm-lock.yaml') { lock = true; continue }
+    if (path === 'pnpm-lock.yaml' || path === 'bun.lock') { lock = true; continue }
     if (path.startsWith('docs/') || /(?:^|\/)README(?:\.[\w-]+)*\.(?:md|yaml)$/.test(path)) continue
     const owner = path.match(/^(packages\/[^/]+\/[^/]+|(?:vendor|apps)\/[^/]+)\//)?.[1]
     if (ptcDirs.has(owner)) selected.add('ptc')
@@ -49,8 +49,8 @@ export function selectScopes(paths) {
     if (/^scripts\/(?:web-product-bundle-isolation|bundle-input-isolation|browser-bundled-externals)\.ts$/.test(path)) selected.add('web')
     if (path === 'packages/client/tsdown.client.ts') selected.add('web')
     if (path.startsWith('native/system/') || path.startsWith('packages/typert/') || path.startsWith('.github/dsp-ci/') ||
-        path === '.github/workflows/dsp-ci.yml' || /^(?:package\.json|pnpm-workspace\.yaml|tsconfig[^/]*\.json|tsdown\.config\.ts|vitest[^/]*\.ts)$/.test(path) ||
-        /^(?:patches\/|scripts\/(?:build\.ts|compile-referenced-projects\.ts|generate-typert\.ts|typert-faces\.ts|workspace-package-globs\.ts|client-build-environment\.ts|types\/))/.test(path)) {
+        path === '.github/workflows/dsp-ci.yml' || /^(?:package\.json|pnpm-workspace\.yaml|bunfig\.toml|tsconfig[^/]*\.json|tsdown\.config\.ts|vitest[^/]*\.ts)$/.test(path) ||
+        /^(?:patches\/|scripts\/(?:build\.ts|compile-referenced-projects\.ts|pnpm-invocation\.ts|workspace-run\.ts|dev-web\.ts|generate-typert\.ts|typert-faces\.ts|workspace-package-globs\.ts|client-build-environment\.ts|types\/))/.test(path)) {
       selected.add('ptc')
       selected.add('web')
     }

@@ -14,7 +14,7 @@ test('Web inputs, shared inputs, and mixed changes select the corresponding chec
     assert.deepEqual(selectScopes([path]), ['web'])
   }
   for (const paths of [['apps/web/src/main.ts', 'packages/ptc-runtime/ptc-runtime/src/index.ts'],
-    ['packages/core/session/src/index.ts'], ['native/system/package.json'], ['pnpm-lock.yaml'], ['tsconfig.base.json']]) {
+    ['packages/core/session/src/index.ts'], ['native/system/package.json'], ['pnpm-lock.yaml'], ['bun.lock'], ['bunfig.toml'], ['tsconfig.base.json']]) {
     assert.deepEqual(selectScopes(paths), ['ptc', 'web'])
   }
   assert.ok([...web.values()].includes('apps/cli') && [...web.values()].includes('apps/web'))

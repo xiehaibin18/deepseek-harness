@@ -6,6 +6,7 @@ import type { TsdownBundle } from 'tsdown'
 import { writeClientBuildRecord } from './client-build-environment.ts'
 import {
   devWebBuildEnvironment,
+  devWebWatchInvocation,
   discoverLibraryDirs,
   discoverPluginDirs,
   parseDevWebArguments,
@@ -105,6 +106,22 @@ describe('parseDevWebArguments', () => {
 
   it('rejects dsh web arguments when no server is started', () => {
     expect(() => parseDevWebArguments(['--no-serve', '--no-open'])).toThrow('--no-serve leaves no dsh web process for --no-open')
+  })
+})
+
+describe('devWebWatchInvocation', () => {
+  it('follows Bun when launched through bun run', () => {
+    expect(devWebWatchInvocation({ npm_execpath: '/Users/herbin/.bun/bin/bun' })).toEqual({
+      command: '/Users/herbin/.bun/bin/bun',
+      args: ['run', '--filter', '@deepseek-ai/dsh-web-frontend', 'watch'],
+    })
+  })
+
+  it('follows pnpm when launched through pnpm run', () => {
+    expect(devWebWatchInvocation({ npm_execpath: '/tools/pnpm/bin/pnpm.cjs' })).toEqual({
+      command: process.execPath,
+      args: ['/tools/pnpm/bin/pnpm.cjs', '--filter', '@deepseek-ai/dsh-web-frontend', 'run', 'watch'],
+    })
   })
 })
 

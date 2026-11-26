@@ -49,7 +49,7 @@ import {
   clientBuildProcessEnvironment,
   repositoryClientBuildEnvironment,
 } from './client-build-environment.ts'
-import { pnpmInvocation } from './pnpm-invocation.ts'
+import { workspaceRunnerInvocation } from './pnpm-invocation.ts'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
@@ -318,13 +318,25 @@ function spawnStage(
 }
 
 /**
+ * Resolve the package-manager invocation for the Web compile shell's watch script.
+ * @param environment - launch environment inspected for `npm_execpath`.
+ * @returns shell-free command and arguments for watching `@deepseek-ai/dsh-web-frontend`.
+ */
+export function devWebWatchInvocation(
+  environment: NodeJS.ProcessEnv = process.env,
+): { command: string; args: string[] } {
+  const { command, args } = workspaceRunnerInvocation(['--filter', SHELL_PACKAGE, 'run', 'watch'], environment)
+  return { command, args }
+}
+
+/**
  * Build every repository artifact, without the aggregate test and script
  * typechecks, with the launch environment untouched:
  * `scripts/build.ts` samples the public client values itself.
  * @returns the build's exit code, or null when a signal ended it.
  */
 async function runBuild(): Promise<number | null> {
-  const invocation = pnpmInvocation(['run', 'build:artifacts'])
+  const invocation = workspaceRunnerInvocation(['run', 'build:artifacts'])
   const result = await execa(invocation.command, invocation.args, { cwd: repoRoot, stdio: 'inherit', reject: false })
   return result.exitCode ?? null
 }
@@ -414,13 +426,15 @@ if (isMain) {
     // working directory — `resolve.dedupe` resolves react from that root, so
     // running vite from anywhere but apps/web silently switches which react copy
     // the bundle gets.
-    spawnStage(supervisor, 'vite build --watch', 'pnpm', ['--filter', SHELL_PACKAGE, 'run', 'watch'], false)
+    const watchInvocation = devWebWatchInvocation()
+    spawnStage(supervisor, 'vite build --watch', watchInvocation.command, watchInvocation.args, false)
     // The same launch vector as the root `dsh` script, so the served Host runs
-    // from source exactly as `pnpm dsh web` would.
+    // from source under either Node (`tsx/esm`) or Bun.
     if (options.serve) {
-      spawnStage(supervisor, 'dsh web', process.execPath, [
-        '--import', 'tsx/esm', 'apps/cli/src/bin.ts', 'web', ...options.appArgs,
-      ], false)
+      const serveArgs = 'bun' in process.versions
+        ? ['apps/cli/src/bin.ts', 'web', ...options.appArgs]
+        : ['--import', 'tsx/esm', 'apps/cli/src/bin.ts', 'web', ...options.appArgs]
+      spawnStage(supervisor, 'dsh web', process.execPath, serveArgs, false)
     }
     console.log(
       `dev-web: watching ${String(pluginDirs.length)} dsh.client plugin packages`
