@@ -28,6 +28,8 @@ jobs:
       - run: node --test .github/dsp-ci/scope.test.mjs .github/dsp-ci/verify-lockfile-sync.test.mjs .github/dsp-ci/verify-trusted-builds.test.mjs
       - name: Verify bun.lock matches pnpm-lock.yaml
         run: node .github/dsp-ci/verify-lockfile-sync.mjs
+      - name: Verify trustedDependencies policy before install
+        run: node .github/dsp-ci/verify-trusted-builds.mjs --pre-install
       - id: plan
         run: node .github/dsp-ci/scope.mjs
 
@@ -50,10 +52,12 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.4.5'
+      - name: Verify trustedDependencies policy before install
+        run: node .github/dsp-ci/verify-trusted-builds.mjs --pre-install
       - name: Install locked workspace dependencies
         run: bun install --frozen-lockfile
       - name: Verify blocked lifecycle scripts match allowBuilds policy
-        run: node .github/dsp-ci/verify-trusted-builds.mjs
+        run: node .github/dsp-ci/verify-trusted-builds.mjs --post-install
       - name: Build and type-check selected workspaces
         run: bun .github/dsp-ci/build.mjs "$SCOPES"
       - name: Test PTC on Node and Bun
