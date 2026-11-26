@@ -52,7 +52,7 @@ jobs:
       - name: Install locked workspace dependencies
         run: pnpm install --frozen-lockfile
       - name: Build and type-check selected workspaces
-        run: pnpm exec tsx .github/dsp-ci/build.mjs "$SCOPES"
+        run: bun .github/dsp-ci/build.mjs "$SCOPES"
       - name: Test PTC on Node and Bun
         if: contains(needs.changes.outputs.scopes, 'ptc')
         run: bash .github/dsp-ci/test.sh ptc

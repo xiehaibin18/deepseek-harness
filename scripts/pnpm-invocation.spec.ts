@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pnpmInvocation } from './pnpm-invocation.ts'
+import { pnpmInvocation, workspaceRunnerInvocation } from './pnpm-invocation.ts'
 
 describe('pnpm invocation', () => {
   it.each([
@@ -26,8 +26,52 @@ describe('pnpm invocation', () => {
     })
   })
 
+  it.each([
+    '/Users/herbin/.bun/bin/bun',
+    String.raw`C:\Users\dev\.bun\bin\bun.exe`,
+  ])('translates pnpm exec and filter syntax for Bun entrypoint %j', (entrypoint) => {
+    expect(pnpmInvocation(['run', 'build:web'], { npm_execpath: entrypoint })).toEqual({
+      command: entrypoint,
+      args: ['run', 'build:web'],
+    })
+    expect(pnpmInvocation(['exec', 'tsdown', '--config-loader', 'native'], { npm_execpath: entrypoint })).toEqual({
+      command: entrypoint,
+      args: ['run', 'tsdown', '--config-loader', 'native'],
+    })
+    expect(pnpmInvocation(['--filter', '@deepseek-ai/dsh-desktop', 'run', 'bundle'], { npm_execpath: entrypoint })).toEqual({
+      command: entrypoint,
+      args: ['run', '--filter', '@deepseek-ai/dsh-desktop', 'bundle'],
+    })
+    expect(pnpmInvocation(['--filter', '@deepseek-ai/dsh-desktop', 'exec', 'install-electron'], { npm_execpath: entrypoint })).toEqual({
+      command: entrypoint,
+      args: ['run', '--filter', '@deepseek-ai/dsh-desktop', 'install-electron'],
+    })
+  })
+
   it.each([undefined, ''])('rejects an unavailable lifecycle entrypoint', (entrypoint) => {
     expect(() => pnpmInvocation([], { npm_execpath: entrypoint }))
       .toThrow('npm_execpath is unavailable; invoke the script through pnpm run')
+  })
+})
+
+describe('workspace runner invocation', () => {
+  it('selects Bun when npm_execpath points to bun', () => {
+    expect(workspaceRunnerInvocation(['--filter', '@deepseek-ai/dsh-desktop', 'run', 'bundle'], {
+      npm_execpath: '/Users/herbin/.bun/bin/bun',
+    })).toEqual({
+      command: '/Users/herbin/.bun/bin/bun',
+      args: ['run', '--filter', '@deepseek-ai/dsh-desktop', 'bundle'],
+      displayCommand: 'bun run --filter @deepseek-ai/dsh-desktop bundle',
+    })
+  })
+
+  it('preserves pnpm entrypoints when npm_execpath points to pnpm', () => {
+    expect(workspaceRunnerInvocation(['exec', 'tsdown', '--env.DSH_BUILD_FACE', 'host'], {
+      npm_execpath: '/tools/pnpm/bin/pnpm.cjs',
+    })).toEqual({
+      command: process.execPath,
+      args: ['/tools/pnpm/bin/pnpm.cjs', 'exec', 'tsdown', '--env.DSH_BUILD_FACE', 'host'],
+      displayCommand: 'pnpm exec tsdown --env.DSH_BUILD_FACE host',
+    })
   })
 })

@@ -8,7 +8,7 @@ import { relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import ts from 'typescript'
-import { pnpmCommand } from './release/process.ts'
+import { workspaceRunnerInvocation } from './pnpm-invocation.ts'
 
 type CompilationMode = 'checked' | 'benchmark-emit'
 
@@ -35,11 +35,11 @@ export interface LibraryStep {
  * @throws If the command cannot start or exits unsuccessfully.
  */
 export function runPnpmCommand(root: string, args: readonly string[]): void {
-  const [command, ...prefix] = pnpmCommand()
-  const result = spawnSync(command, [...prefix, ...args], { cwd: root, stdio: 'inherit' })
+  const invocation = workspaceRunnerInvocation(args)
+  const result = spawnSync(invocation.command, invocation.args, { cwd: root, stdio: 'inherit' })
   if (result.error !== undefined) throw result.error
   if (result.status !== 0) {
-    throw new Error(`compile-referenced-projects: pnpm ${args.join(' ')} exited with ${String(result.status ?? result.signal)}`)
+    throw new Error(`compile-referenced-projects: ${invocation.displayCommand} exited with ${String(result.status ?? result.signal)}`)
   }
 }
 
@@ -144,23 +144,25 @@ function compilerStep(
 }
 
 // Typert reads workspace packages only from source (generate-typert.ts
-// rejects build outputs), so it needs no compiled package. It runs under tsx's
-// ESM hook rather than through `pnpm exec`, whose startup would lengthen the
-// critical path before package compilation.
+// rejects build outputs), so it needs no compiled package. Under Bun it runs
+// directly; under Node it uses tsx's ESM hook rather than `pnpm exec`, whose
+// startup would lengthen the critical path before package compilation.
 function typertStep(): LibraryStep {
+  const scriptPath = fileURLToPath(new URL('generate-typert.ts', import.meta.url))
+  const isBun = 'bun' in process.versions
   return {
     id: 'host-typert',
     label: 'Host Typert',
-    displayCommand: 'tsx scripts/generate-typert.ts',
+    displayCommand: isBun ? 'bun scripts/generate-typert.ts' : 'tsx scripts/generate-typert.ts',
     command: process.execPath,
-    args: ['--import', import.meta.resolve('tsx/esm'), fileURLToPath(new URL('generate-typert.ts', import.meta.url))],
+    args: isBun ? [scriptPath] : ['--import', import.meta.resolve('tsx/esm'), scriptPath],
     needs: [],
   }
 }
 
 function pnpmStep(id: LibraryStepId, label: string, args: readonly string[], needs: readonly LibraryStepId[]): LibraryStep {
-  const [command, ...prefix] = pnpmCommand()
-  return { id, label, displayCommand: `pnpm ${args.join(' ')}`, command, args: [...prefix, ...args], needs }
+  const invocation = workspaceRunnerInvocation(args)
+  return { id, label, displayCommand: invocation.displayCommand, command: invocation.command, args: invocation.args, needs }
 }
 
 /**
