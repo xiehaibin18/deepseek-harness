@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  evaluateAllowBuildsInstance,
   formatTrustedBuildsReport,
   parseBunUntrustedOutput,
   parsePnpmAllowBuilds,
@@ -61,6 +62,102 @@ test('parsePnpmAllowBuilds separates unqualified and qualified rules', () => {
     true,
   )
   assert.equal(policy.qualified.get('@larksuite/cli')?.get('ver:1.0.97'), false)
+})
+
+test('evaluateAllowBuildsInstance prioritizes denial over approval matching pnpm 11 decideAllowBuild', () => {
+  const packageDeniedVersionAllowed = parsePnpmAllowBuilds(`allowBuilds:
+  overlap-pkg: false
+  'overlap-pkg@1.0.0': true
+`)
+  assert.equal(
+    evaluateAllowBuildsInstance({ name: 'overlap-pkg', qualifier: '1.0.0' }, packageDeniedVersionAllowed),
+    'denied',
+  )
+
+  const packageAllowedVersionDenied = parsePnpmAllowBuilds(`allowBuilds:
+  overlap-pkg: true
+  'overlap-pkg@1.0.0': false
+`)
+  assert.equal(
+    evaluateAllowBuildsInstance({ name: 'overlap-pkg', qualifier: '1.0.0' }, packageAllowedVersionDenied),
+    'denied',
+  )
+
+  const preResult = verifyPreInstallTrustedBuilds({
+    workspaceYaml: `allowBuilds:\n  overlap-pkg: false\n  'overlap-pkg@1.0.0': true\n`,
+    packageJsonText: JSON.stringify({ name: 'root', trustedDependencies: ['overlap-pkg'] }),
+    bunLockText: `{ "packages": { "overlap-pkg": ["overlap-pkg@1.0.0", "", {}, "sha512-x=="] } }`,
+  })
+  assert.equal(preResult.ok, false)
+  assert.deepEqual(preResult.widenedQualifiedTrusted, [
+    { trustedSpec: 'overlap-pkg', rejectedInstances: ['overlap-pkg@1.0.0 (denied)'] },
+  ])
+})
+
+test('verifyTrustedBuilds passes on Bun 1.4.5 verbatim zero-untrusted output', () => {
+  const zeroUntrusted = `bun pm untrusted v1.4.5-canary.1 (4ce14ba8b)
+
+Found 0 untrusted dependencies with scripts.
+
+This means all packages with scripts are in "trustedDependencies" or none of your dependencies have scripts.
+
+For more information, visit https://bun.com/docs/install/lifecycle#trusteddependencies
+`
+  const result = verifyTrustedBuilds({
+    untrustedOutput: zeroUntrusted,
+    workspaceYaml: sampleWorkspaceYaml,
+    packageJsonText: samplePackageJson,
+    bunLockText: sampleBunLock,
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.blockedCount, 0)
+})
+
+test('verifyTrustedBuilds accepts an explicitly denied local tarball with parent path and spaces', () => {
+  const tgzWorkspaceYaml = `allowBuilds:
+  'probe-tgz@file:../spacing probe.tgz': false
+`
+  const tgzBunLock = `{
+  "lockfileVersion": 2,
+  "workspaces": {
+    "": {
+      "name": "app",
+      "dependencies": {
+        "probe-tgz": "file:../spacing probe.tgz",
+      },
+    },
+  },
+  "packages": {
+    "probe-tgz": ["probe-tgz@../spacing probe.tgz", { "hasInstallScript": true }, "sha512-95mRhzgZpdHEj4o1cIAmJcTLChkeErrU+MMWKrNfUF7vjciynEtQEYI/CV/fkjzak+lxZvO/EmbXsBris4RKTA=="],
+  },
+}
+`
+  const tgzUntrusted = `bun pm untrusted v1.4.5-canary.1 (4ce14ba8b)
+
+./node_modules/.bun/probe-tgz@..+spacing probe.tgz+f79991873819a5d1/node_modules/probe-tgz @../spacing probe.tgz
+ » [postinstall]: echo hi
+
+These dependencies had their lifecycle scripts blocked during install.
+
+If you trust them and wish to run their scripts, use \`bun pm trust\`.
+`
+  const denied = verifyTrustedBuilds({
+    untrustedOutput: tgzUntrusted,
+    workspaceYaml: tgzWorkspaceYaml,
+    packageJsonText: JSON.stringify({ name: 'app', trustedDependencies: [] }),
+    bunLockText: tgzBunLock,
+  })
+  assert.equal(denied.ok, true)
+  assert.equal(denied.blockedCount, 1)
+
+  const unreviewed = verifyTrustedBuilds({
+    untrustedOutput: tgzUntrusted,
+    workspaceYaml: 'allowBuilds:\n',
+    packageJsonText: JSON.stringify({ name: 'app', trustedDependencies: [] }),
+    bunLockText: tgzBunLock,
+  })
+  assert.equal(unreviewed.ok, false)
+  assert.deepEqual(unreviewed.unreviewedBlocked, ['probe-tgz@file:../spacing probe.tgz'])
 })
 
 test('verifyTrustedBuilds passes when pre-install trust and post-install blocked scripts match allowBuilds', () => {

@@ -3,7 +3,7 @@
  * 1. All resolved package specs and integrity hashes (`packages`),
  * 2. All applied patches (`patchedDependencies`),
  * 3. Every workspace's resolved direct dependency versions (`importers` vs `workspaces`/`packages`),
- * 4. Every non-peer transitive dependency edge (`snapshots` vs `packages`).
+ * 4. Bidirectional non-peer transitive dependency edges (`snapshots` vs `packages`).
  */
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
@@ -98,25 +98,20 @@ function normalizePnpmDepSpec(depName, rawVersion) {
 }
 
 /**
- * Parse pnpm-lock.yaml (v9) packages, patches, workspace importers, and transitive snapshot edges
- * without external dependencies.
+ * Parse pnpm-lock.yaml (v9) packages, peer declarations, patches, workspace importers,
+ * and transitive snapshot edges without external dependencies.
  * @param {string} text - Raw pnpm-lock.yaml content.
- * @returns {{
- *   packages: Map<string, string>,
- *   patchedDependencies: Set<string>,
- *   importers: Map<string, Map<string, string>>,
- *   snapshotEdges: Map<string, Map<string, Set<string>>>,
- * }}
  */
 export function parsePnpmLockfile(text) {
   const packages = new Map()
+  const packagePeers = new Map()
   const patchedDependencies = new Set()
   const importers = new Map()
   const snapshotEdges = new Map()
 
   let section = null
   let currentPackage = null
-  let inResolutionBlock = false
+  let currentPackageSubblock = null
 
   let currentImporter = null
   let currentImporterSection = null
@@ -134,7 +129,7 @@ export function parsePnpmLockfile(text) {
       const topMatch = line.match(/^([A-Za-z0-9_-]+):\s*$/)
       section = topMatch ? topMatch[1] : null
       currentPackage = null
-      inResolutionBlock = false
+      currentPackageSubblock = null
       currentImporter = null
       currentImporterSection = null
       currentImporterDep = null
@@ -153,29 +148,37 @@ export function parsePnpmLockfile(text) {
       const pkgMatch = line.match(/^  (\S.*):\s*$/)
       if (pkgMatch) {
         currentPackage = unquoteYamlScalar(pkgMatch[1])
-        inResolutionBlock = false
+        currentPackageSubblock = null
         continue
       }
       if (!currentPackage) continue
-      if (line.startsWith('    resolution:')) {
-        const inlineIntegrity = line.match(/integrity:\s*([^\s,}]+)/)
-        if (inlineIntegrity) {
-          packages.set(currentPackage, unquoteYamlScalar(inlineIntegrity[1]))
-          inResolutionBlock = false
+      if (line.startsWith('    ') && !line.startsWith('      ')) {
+        if (line.startsWith('    resolution:')) {
+          const inlineIntegrity = line.match(/integrity:\s*([^\s,}]+)/)
+          if (inlineIntegrity) {
+            packages.set(currentPackage, unquoteYamlScalar(inlineIntegrity[1]))
+            currentPackageSubblock = null
+          } else {
+            currentPackageSubblock = line.trim() === 'resolution:' ? 'resolution' : null
+          }
+        } else if (/^    peerDependencies:\s*$/.test(line)) {
+          currentPackageSubblock = 'peerDependencies'
         } else {
-          inResolutionBlock = line.trim() === 'resolution:'
+          currentPackageSubblock = null
         }
         continue
       }
-      if (inResolutionBlock) {
-        if (!line.startsWith('      ')) {
-          inResolutionBlock = false
-          continue
-        }
+      if (currentPackageSubblock === 'resolution') {
         const blockIntegrity = line.match(/^      integrity:\s*(.+)$/)
         if (blockIntegrity) {
           packages.set(currentPackage, unquoteYamlScalar(blockIntegrity[1]))
-          inResolutionBlock = false
+          currentPackageSubblock = null
+        }
+      } else if (currentPackageSubblock === 'peerDependencies') {
+        const peerMatch = line.match(/^      (\S.*?):\s*(.+)$/)
+        if (peerMatch) {
+          if (!packagePeers.has(currentPackage)) packagePeers.set(currentPackage, new Set())
+          packagePeers.get(currentPackage).add(unquoteYamlScalar(peerMatch[1]))
         }
       }
       continue
@@ -242,7 +245,7 @@ export function parsePnpmLockfile(text) {
     }
   }
 
-  return { packages, patchedDependencies, importers, snapshotEdges }
+  return { packages, packagePeers, patchedDependencies, importers, snapshotEdges }
 }
 
 function splitBunPackageKey(key) {
@@ -297,7 +300,7 @@ export function parseBunLockfile(text) {
 
 /**
  * Compare pnpm-lock.yaml against bun.lock across global packages, integrity hashes, patches,
- * per-workspace resolved dependency versions, and non-peer transitive dependency edges.
+ * per-workspace resolved dependency versions, and bidirectional non-peer transitive edges.
  * @param {string} pnpmText - Raw pnpm-lock.yaml content.
  * @param {string} bunText - Raw bun.lock content.
  */
@@ -345,31 +348,83 @@ export function compareLockfiles(pnpmText, bunText) {
     }
   }
 
-  const transitiveMismatches = []
-  let transitiveEdgeCount = 0
+  // Collect declared peerDependencies from both lockfiles so peer-dependency hoisting differences
+  // are excluded while all non-peer dependencies and optionalDependencies are compared bidirectionally.
+  const peersByParent = new Map()
+  const addPeerNames = (parent, names) => {
+    if (!names) return
+    if (!peersByParent.has(parent)) peersByParent.set(parent, new Set())
+    const set = peersByParent.get(parent)
+    for (const name of names) set.add(name)
+  }
+  for (const [parent, peerSet] of pnpm.packagePeers) addPeerNames(parent, peerSet)
+  for (const entry of Object.values(bun.rawPackages)) {
+    if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue
+    const meta = entry.find(item => item && typeof item === 'object' && !Array.isArray(item))
+    if (meta?.peerDependencies) addPeerNames(entry[0], Object.keys(meta.peerDependencies))
+  }
+
+  const pnpmNonPeerEdges = new Map()
+  for (const [parent, depMap] of pnpm.snapshotEdges) {
+    const peers = peersByParent.get(parent)
+    for (const [depName, specSet] of depMap) {
+      if (peers?.has(depName)) continue
+      if (!pnpmNonPeerEdges.has(parent)) pnpmNonPeerEdges.set(parent, new Map())
+      pnpmNonPeerEdges.get(parent).set(depName, new Set(specSet))
+    }
+  }
+
+  const bunNonPeerEdges = new Map()
   for (const [pkgKey, entry] of Object.entries(bun.rawPackages)) {
     if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue
-    const parentSpec = entry[0]
-    if (parentSpec.includes('@workspace:') || parentSpec.includes('@link:')) continue
+    const parent = entry[0]
+    if (parent.includes('@workspace:') || parent.includes('@link:')) continue
     const meta = entry.find(item => item && typeof item === 'object' && !Array.isArray(item))
     if (!meta) continue
-    const pnpmParentDeps = pnpm.snapshotEdges.get(parentSpec)
-    if (!pnpmParentDeps) continue
+    const peers = peersByParent.get(parent)
     for (const sec of ['dependencies', 'optionalDependencies']) {
       for (const depName of Object.keys(meta[sec] ?? {})) {
+        if (peers?.has(depName)) continue
         const bunResolved = resolveBunDependencyFromKey(bun.rawPackages, pkgKey, depName)
         if (!bunResolved || bunResolved.includes('@workspace:') || bunResolved.includes('@link:')) continue
-        const pnpmAllowed = pnpmParentDeps.get(depName)
-        if (!pnpmAllowed) continue
+        if (!bunNonPeerEdges.has(parent)) bunNonPeerEdges.set(parent, new Map())
+        const depMap = bunNonPeerEdges.get(parent)
+        if (!depMap.has(depName)) depMap.set(depName, new Set())
+        depMap.get(depName).add(bunResolved)
+      }
+    }
+  }
+
+  const missingTransitiveInBun = []
+  const extraTransitiveInBun = []
+  const transitiveMismatches = []
+  let transitiveEdgeCount = 0
+
+  const allParents = new Set([...pnpmNonPeerEdges.keys(), ...bunNonPeerEdges.keys()])
+  for (const parent of allParents) {
+    const pnpmDeps = pnpmNonPeerEdges.get(parent) ?? new Map()
+    const bunDeps = bunNonPeerEdges.get(parent) ?? new Map()
+    for (const [depName, pnpmAllowed] of pnpmDeps) {
+      transitiveEdgeCount += 1
+      const bunResolvedSet = bunDeps.get(depName)
+      if (!bunResolvedSet) {
+        missingTransitiveInBun.push({ parent, dep: depName, pnpm: [...pnpmAllowed].sort().join(' | ') })
+        continue
+      }
+      const unexpectedBun = [...bunResolvedSet].filter(spec => !pnpmAllowed.has(spec))
+      if (unexpectedBun.length > 0) {
+        transitiveMismatches.push({
+          parent,
+          dep: depName,
+          pnpm: [...pnpmAllowed].sort().join(' | '),
+          bun: [...bunResolvedSet].sort().join(' | '),
+        })
+      }
+    }
+    for (const [depName, bunResolvedSet] of bunDeps) {
+      if (!pnpmDeps.has(depName)) {
         transitiveEdgeCount += 1
-        if (!pnpmAllowed.has(bunResolved)) {
-          transitiveMismatches.push({
-            parent: parentSpec,
-            dep: depName,
-            pnpm: [...pnpmAllowed].sort().join(' | '),
-            bun: bunResolved,
-          })
-        }
+        extraTransitiveInBun.push({ parent, dep: depName, bun: [...bunResolvedSet].sort().join(' | ') })
       }
     }
   }
@@ -378,6 +433,8 @@ export function compareLockfiles(pnpmText, bunText) {
   extraInBun.sort()
   integrityMismatches.sort((a, b) => a.spec.localeCompare(b.spec))
   workspaceMismatches.sort((a, b) => `${a.workspace}:${a.dep}`.localeCompare(`${b.workspace}:${b.dep}`))
+  missingTransitiveInBun.sort((a, b) => `${a.parent}:${a.dep}`.localeCompare(`${b.parent}:${b.dep}`))
+  extraTransitiveInBun.sort((a, b) => `${a.parent}:${a.dep}`.localeCompare(`${b.parent}:${b.dep}`))
   transitiveMismatches.sort((a, b) => `${a.parent}:${a.dep}`.localeCompare(`${b.parent}:${b.dep}`))
 
   return {
@@ -392,10 +449,13 @@ export function compareLockfiles(pnpmText, bunText) {
     missingPatchesInBun,
     extraPatchesInBun,
     workspaceMismatches,
+    missingTransitiveInBun,
+    extraTransitiveInBun,
     transitiveMismatches,
     inSync: missingInBun.length === 0 && extraInBun.length === 0 && integrityMismatches.length === 0 &&
       missingPatchesInBun.length === 0 && extraPatchesInBun.length === 0 &&
-      workspaceMismatches.length === 0 && transitiveMismatches.length === 0,
+      workspaceMismatches.length === 0 && missingTransitiveInBun.length === 0 &&
+      extraTransitiveInBun.length === 0 && transitiveMismatches.length === 0,
   }
 }
 
@@ -429,6 +489,14 @@ export function formatDriftReport(result) {
   summarize(
     'Workspace dependency resolution mismatches',
     result.workspaceMismatches.map(m => `${m.workspace} -> ${m.dep} (pnpm=${m.pnpm} vs bun=${m.bun})`),
+  )
+  summarize(
+    'Transitive dependency edges present in pnpm-lock.yaml but missing in bun.lock',
+    result.missingTransitiveInBun.map(m => `${m.parent} -> ${m.dep} (pnpm=${m.pnpm})`),
+  )
+  summarize(
+    'Transitive dependency edges present in bun.lock but missing in pnpm-lock.yaml',
+    result.extraTransitiveInBun.map(m => `${m.parent} -> ${m.dep} (bun=${m.bun})`),
   )
   summarize(
     'Transitive dependency resolution mismatches',

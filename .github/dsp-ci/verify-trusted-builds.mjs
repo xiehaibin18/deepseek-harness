@@ -3,10 +3,12 @@
  * - `--pre-install`: runs BEFORE `bun install --frozen-lockfile`. Requires an explicit root
  *   `trustedDependencies` array (omitting it re-enables Bun's built-in default allowlist), and
  *   verifies that EVERY resolved instance in `bun.lock` covered by `trustedDependencies` is
- *   explicitly approved (`true`) by `allowBuilds` without widening version- or source-qualified rules.
+ *   explicitly approved (`true`) by `allowBuilds` using pnpm 11 deny-over-allow precedence
+ *   without widening version- or source-qualified rules.
  * - `--post-install`: runs all `--pre-install` checks plus parses `bun pm untrusted` strictly
- *   (handling spaces in local paths/sources and failing loudly on any unrecognized output line)
- *   to verify every blocked lifecycle script is explicitly denied (`false`) in `allowBuilds`.
+ *   (supporting zero-untrusted output, spaced local directories/tarballs via lockfile resolution,
+ *   and failing loudly on any unrecognized output line) to verify every blocked lifecycle script
+ *   is explicitly denied (`false`) in `allowBuilds`.
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -34,7 +36,7 @@ function normalizeRelativeSourcePath(rawPath) {
 }
 
 /**
- * Split a package spec into its npm package name and optional qualifier (`1.2.3`, `file:...`, `workspace:...`).
+ * Split a package spec into its npm package name and optional qualifier (`1.2.3`, `file:...`, `workspace:...`, `../foo.tgz`).
  * @param {string} spec - Package name or `name@qualifier`.
  * @returns {{ name: string, qualifier: string | null }}
  */
@@ -45,11 +47,19 @@ export function parsePackageSpec(spec) {
   return { name: spec.slice(0, atIndex), qualifier: spec.slice(atIndex + 1) }
 }
 
+function isLocalPathQualifier(qualifier) {
+  return qualifier.startsWith('file:') ||
+    qualifier.startsWith('workspace:') ||
+    qualifier.startsWith('./') ||
+    qualifier.startsWith('../') ||
+    qualifier.startsWith('/')
+}
+
 /**
  * Normalize a package instance qualifier into a canonical comparison key.
- * Both `file:./a/b` and `workspace:a/b` normalize to `local:a/b` so pnpm's
- * `pkg@file:packages/foo` rule matches Bun's `pkg@workspace:packages/foo` lockfile entry
- * only for that exact repo-relative directory.
+ * `file:./a/b`, `workspace:a/b`, and bare local relative paths like `../spacing probe.tgz`
+ * normalize to `local:<normalized-path>` so pnpm `allowBuilds` `file:` entries match Bun
+ * lockfile and `bun pm untrusted` local directory/tarball records consistently.
  * @param {string | null} qualifier
  * @returns {string | null}
  */
@@ -57,6 +67,9 @@ function canonicalQualifier(qualifier) {
   if (qualifier === null) return null
   if (qualifier.startsWith('file:')) return `local:${normalizeRelativeSourcePath(qualifier.slice('file:'.length))}`
   if (qualifier.startsWith('workspace:')) return `local:${normalizeRelativeSourcePath(qualifier.slice('workspace:'.length))}`
+  if (qualifier.startsWith('./') || qualifier.startsWith('../') || qualifier.startsWith('/')) {
+    return `local:${normalizeRelativeSourcePath(qualifier)}`
+  }
   return `ver:${qualifier}`
 }
 
@@ -98,33 +111,53 @@ export function parsePnpmAllowBuilds(yamlText) {
 }
 
 /**
- * Evaluate a specific resolved package instance against `allowBuilds` with pnpm precedence
- * (qualified rule overrides unqualified package rule).
+ * Evaluate a specific resolved package instance against `allowBuilds` matching pnpm 11.28.5
+ * `decideAllowBuild` precedence: any matching denial (`false`) overrides any matching approval (`true`),
+ * regardless of whether the denial is unqualified or version/source-qualified.
  * @param {{ name: string, qualifier: string | null }} instance
  * @param {ReturnType<typeof parsePnpmAllowBuilds>} policy
  * @returns {'allowed' | 'denied' | 'unreviewed'}
  */
 export function evaluateAllowBuildsInstance(instance, policy) {
+  const matches = []
   const qualMap = policy.qualified.get(instance.name)
   if (instance.qualifier !== null && qualMap) {
     const exactKey = canonicalQualifier(instance.qualifier)
-    if (qualMap.has(exactKey)) return qualMap.get(exactKey) ? 'allowed' : 'denied'
+    if (qualMap.has(exactKey)) matches.push(qualMap.get(exactKey))
   }
   if (policy.unqualified.has(instance.name)) {
-    return policy.unqualified.get(instance.name) ? 'allowed' : 'denied'
+    matches.push(policy.unqualified.get(instance.name))
   }
+  if (matches.includes(false)) return 'denied'
+  if (matches.includes(true)) return 'allowed'
   return 'unreviewed'
 }
 
 /**
- * Extract every resolved package instance (`name` + `qualifier`) from bun.lock.
+ * Extract every resolved package instance (`name` + `qualifier`) and declared workspace local
+ * (`file:` / `workspace:`) source paths from bun.lock.
  * @param {string} bunLockText - Raw bun.lock JSONC content.
- * @returns {Map<string, Array<{ name: string, qualifier: string | null, spec: string }>>}
  */
 export function parseBunLockInstances(bunLockText) {
   const parsed = parseJsonc(bunLockText)
   const byName = new Map()
+  const localPathsByName = new Map()
   const seen = new Set()
+
+  const recordLocalPath = (name, rawPath) => {
+    if (!localPathsByName.has(name)) localPathsByName.set(name, new Set())
+    localPathsByName.get(name).add(normalizeRelativeSourcePath(rawPath))
+  }
+
+  for (const ws of Object.values(parsed.workspaces ?? {})) {
+    for (const sec of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+      for (const [depName, range] of Object.entries(ws?.[sec] ?? {})) {
+        if (typeof range !== 'string') continue
+        if (range.startsWith('file:')) recordLocalPath(depName, range.slice('file:'.length))
+        else if (range.startsWith('workspace:')) recordLocalPath(depName, range.slice('workspace:'.length))
+      }
+    }
+  }
 
   for (const entry of Object.values(parsed.packages ?? {})) {
     if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue
@@ -132,37 +165,67 @@ export function parseBunLockInstances(bunLockText) {
     if (seen.has(spec)) continue
     seen.add(spec)
     const { name, qualifier } = parsePackageSpec(spec)
+    let normalizedQualifier = qualifier
+    if (qualifier !== null) {
+      if (qualifier.startsWith('file:')) {
+        recordLocalPath(name, qualifier.slice('file:'.length))
+      } else if (qualifier.startsWith('workspace:')) {
+        recordLocalPath(name, qualifier.slice('workspace:'.length))
+      } else if (
+        isLocalPathQualifier(qualifier) ||
+        localPathsByName.get(name)?.has(normalizeRelativeSourcePath(qualifier))
+      ) {
+        normalizedQualifier = `file:${qualifier}`
+        recordLocalPath(name, qualifier)
+      }
+    }
     if (!byName.has(name)) byName.set(name, [])
-    byName.get(name).push({ name, qualifier, spec })
+    byName.get(name).push({ name, qualifier: normalizedQualifier, spec })
   }
 
-  return byName
+  return { byName, localPathsByName }
 }
 
 /**
  * Parse package entries printed by `bun pm untrusted` strictly line-by-line.
- * Supports local paths/sources containing spaces and throws on any unrecognized line
+ * Recognizes Bun 1.4.5's zero-untrusted output, supports local paths/tarballs containing spaces
+ * (using bun.lock local source declarations when available), and throws on any unrecognized line
  * so partial parsing can never silently drop a blocked dependency.
  * @param {string} output - Combined stdout from `bun pm untrusted`.
+ * @param {Map<string, Set<string>>} [localPathsByName] - Optional normalized local paths from bun.lock.
  * @returns {Array<{ name: string, qualifier: string, spec: string }>}
  */
-export function parseBunUntrustedOutput(output) {
+export function parseBunUntrustedOutput(output, localPathsByName = new Map()) {
   const clean = output.replace(ansiPattern, '')
   const entries = []
   const seen = new Set()
   let currentEntry = null
   let sawBlockedFooter = false
+  let sawZeroUntrusted = false
 
   for (const rawLine of clean.split(/\r?\n/)) {
     const line = rawLine.trim()
     if (line === '') continue
     if (/^bun pm untrusted\b/.test(line)) continue
+    if (/^Found 0 untrusted dependencies with scripts\.$/i.test(line)) {
+      sawZeroUntrusted = true
+      continue
+    }
+    if (/^This means all packages with scripts are in "trustedDependencies" or none of your dependencies have scripts\.$/i.test(line)) {
+      continue
+    }
+    if (/^For more information, visit https:\/\/bun\.(?:com|sh)\/docs\/install\/lifecycle#trusteddependencies$/i.test(line)) {
+      continue
+    }
     if (/^These dependencies had their lifecycle scripts blocked during install\.$/i.test(line)) {
       sawBlockedFooter = true
       continue
     }
     if (/^If you trust them and wish to run their scripts, use `bun pm trust`\.$/i.test(line)) continue
-    if (/^No untrusted dependencies\b/i.test(line)) continue
+    if (/^No untrusted dependencies\b/i.test(line)) {
+      sawZeroUntrusted = true
+      continue
+    }
     if (/^»\s+\[[^\]]+\]:/.test(line)) {
       if (!currentEntry) {
         throw new Error(`Unexpected hook line without preceding package header in \`bun pm untrusted\`: ${line}`)
@@ -176,8 +239,10 @@ export function parseBunUntrustedOutput(output) {
     }
 
     const [, prefixPath, name, rawQualifier] = headerMatch
-    const isFileSource = prefixPath.includes('@file+')
-    const qualifier = isFileSource && !rawQualifier.startsWith('file:')
+    const isLocalSource = prefixPath.includes('@file+') ||
+      isLocalPathQualifier(rawQualifier) ||
+      Boolean(localPathsByName.get(name)?.has(normalizeRelativeSourcePath(rawQualifier)))
+    const qualifier = isLocalSource && !rawQualifier.startsWith('file:') && !rawQualifier.startsWith('workspace:')
       ? `file:${rawQualifier}`
       : rawQualifier
     const spec = `${name}@${qualifier}`
@@ -188,6 +253,9 @@ export function parseBunUntrustedOutput(output) {
     }
   }
 
+  if (sawZeroUntrusted && entries.length > 0) {
+    throw new Error('Contradictory `bun pm untrusted` output: reported 0 untrusted dependencies alongside package entries.')
+  }
   if (sawBlockedFooter && entries.length === 0) {
     throw new Error('Failed to parse blocked dependencies from `bun pm untrusted` output:\n' + clean)
   }
@@ -198,13 +266,14 @@ export function parseBunUntrustedOutput(output) {
 /**
  * Pre-install validation: verify root `package.json#trustedDependencies` is explicitly declared
  * and that every resolved instance in `bun.lock` that Bun would trust is explicitly approved
- * (`true`) in `pnpm-workspace.yaml#allowBuilds` (never widening version/source-qualified rules).
+ * (`true`) in `pnpm-workspace.yaml#allowBuilds` under deny-over-allow precedence without widening
+ * version/source-qualified rules.
  * @param {{ workspaceYaml: string, packageJsonText: string, bunLockText: string }} input
  */
 export function verifyPreInstallTrustedBuilds({ workspaceYaml, packageJsonText, bunLockText }) {
   const policy = parsePnpmAllowBuilds(workspaceYaml)
   const manifest = JSON.parse(packageJsonText)
-  const lockInstances = parseBunLockInstances(bunLockText)
+  const { byName: lockInstances } = parseBunLockInstances(bunLockText)
 
   const manifestErrors = []
   const unapprovedTrusted = []
@@ -231,7 +300,6 @@ export function verifyPreInstallTrustedBuilds({ workspaceYaml, packageJsonText, 
       : allInstances.filter(inst => canonicalQualifier(inst.qualifier) === canonicalQualifier(parsedTrusted.qualifier))
 
     if (matchedInstances.length === 0) {
-      // No resolved instance in bun.lock: only accept if allowBuilds explicitly approves this exact spec.
       const decision = evaluateAllowBuildsInstance(parsedTrusted, policy)
       if (decision !== 'allowed') unapprovedTrusted.push(trustedSpec)
       continue
@@ -276,7 +344,8 @@ export function verifyPreInstallTrustedBuilds({ workspaceYaml, packageJsonText, 
 export function verifyTrustedBuilds({ untrustedOutput, workspaceYaml, packageJsonText, bunLockText }) {
   const pre = verifyPreInstallTrustedBuilds({ workspaceYaml, packageJsonText, bunLockText })
   const policy = parsePnpmAllowBuilds(workspaceYaml)
-  const blocked = parseBunUntrustedOutput(untrustedOutput)
+  const { localPathsByName } = parseBunLockInstances(bunLockText)
+  const blocked = parseBunUntrustedOutput(untrustedOutput, localPathsByName)
 
   const unreviewedBlocked = []
   const allowedButBlocked = []
