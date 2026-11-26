@@ -42,4 +42,4 @@ for (const face of scopes.includes('web') ? ['host', 'client'] : ['host']) {
   bunRun(['tsc', '-b', ...projects])
   execFileSync(process.execPath, ['.github/dsp-ci/bundle.mjs', face, ...workspaces], { stdio: 'inherit', env })
 }
-if (scopes.includes('web')) bunRun(['build:web'])
+if (scopes.includes('web')) bunRun(['--filter', '@deepseek-ai/dsh-web-frontend', 'build'])

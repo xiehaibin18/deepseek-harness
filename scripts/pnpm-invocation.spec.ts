@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { pnpmInvocation, workspaceRunnerInvocation } from './pnpm-invocation.ts'
+
+const repoRoot = resolve(import.meta.dirname, '..')
+const bunExecutable = process.env.DSH_TEST_BUN_EXECUTABLE
 
 describe('pnpm invocation', () => {
   it.each([
@@ -29,7 +36,7 @@ describe('pnpm invocation', () => {
   it.each([
     '/Users/herbin/.bun/bin/bun',
     String.raw`C:\Users\dev\.bun\bin\bun.exe`,
-  ])('translates pnpm exec and filter syntax for Bun entrypoint %j', (entrypoint) => {
+  ])('keeps workspace run and exec semantics distinct for Bun entrypoint %j', (entrypoint) => {
     expect(pnpmInvocation(['run', 'build:web'], { npm_execpath: entrypoint })).toEqual({
       command: entrypoint,
       args: ['run', 'build:web'],
@@ -44,8 +51,36 @@ describe('pnpm invocation', () => {
     })
     expect(pnpmInvocation(['--filter', '@deepseek-ai/dsh-desktop', 'exec', 'install-electron'], { npm_execpath: entrypoint })).toEqual({
       command: entrypoint,
-      args: ['run', '--filter', '@deepseek-ai/dsh-desktop', 'install-electron'],
+      args: ['run', '--cwd', resolve(repoRoot, 'apps/desktop'), 'install-electron'],
     })
+  })
+
+  it('rejects an unknown workspace name when translating Bun workspace exec', () => {
+    expect(() => pnpmInvocation(['--filter', '@deepseek-ai/nonexistent-ws', 'exec', 'tool'], {
+      npm_execpath: '/Users/herbin/.bun/bin/bun',
+    })).toThrow('cannot resolve workspace "@deepseek-ai/nonexistent-ws"')
+  })
+
+  it.skipIf(!bunExecutable || process.platform === 'win32')('executes a workspace dependency binary under real Bun', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-pnpm-inv-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const wsDir = join(root, 'apps/probe-ws')
+    const binDir = join(wsDir, 'node_modules/.bin')
+    mkdirSync(binDir, { recursive: true })
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'root', private: true, workspaces: ['apps/*'] }))
+    writeFileSync(join(wsDir, 'package.json'), JSON.stringify({ name: '@probe/ws', version: '1.0.0' }))
+    const binPath = join(binDir, 'probe-bin')
+    writeFileSync(binPath, '#!/bin/sh\necho "probe-bin:$*"\n')
+    chmodSync(binPath, 0o755)
+
+    const invocation = pnpmInvocation(
+      ['--filter', '@probe/ws', 'exec', 'probe-bin', '--version'],
+      { npm_execpath: bunExecutable },
+      root,
+    )
+    const result = spawnSync(invocation.command, invocation.args, { cwd: root, encoding: 'utf8' })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe('probe-bin:--version')
   })
 
   it.each([undefined, ''])('rejects an unavailable lifecycle entrypoint', (entrypoint) => {
