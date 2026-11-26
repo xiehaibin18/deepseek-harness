@@ -25,7 +25,9 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: '24.22.3'
-      - run: node --test .github/dsp-ci/scope.test.mjs
+      - run: node --test .github/dsp-ci/scope.test.mjs .github/dsp-ci/verify-lockfile-sync.test.mjs .github/dsp-ci/verify-trusted-builds.test.mjs
+      - name: Verify bun.lock matches pnpm-lock.yaml
+        run: node .github/dsp-ci/verify-lockfile-sync.mjs
       - id: plan
         run: node .github/dsp-ci/scope.mjs
 
@@ -50,6 +52,8 @@ jobs:
           bun-version: '1.4.5'
       - name: Install locked workspace dependencies
         run: bun install --frozen-lockfile
+      - name: Verify blocked lifecycle scripts match allowBuilds policy
+        run: node .github/dsp-ci/verify-trusted-builds.mjs
       - name: Build and type-check selected workspaces
         run: bun .github/dsp-ci/build.mjs "$SCOPES"
       - name: Test PTC on Node and Bun
