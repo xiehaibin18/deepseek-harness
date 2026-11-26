@@ -105,7 +105,10 @@ describe('pnpm invocation', () => {
       scripts: { build: 'node -e "console.log(\'runner:\' + process.env.npm_execpath)"' },
     }))
 
-    const result = spawnSync(bunExecutable, ['run', 'build:web'], { cwd: root, encoding: 'utf8' })
+    const standaloneEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key !== 'npm_execpath' && !key.startsWith('npm_lifecycle_')),
+    )
+    const result = spawnSync(bunExecutable, ['run', 'build:web'], { cwd: root, env: standaloneEnv, encoding: 'utf8' })
     expect(result.status, result.stdout + result.stderr).toBe(0)
     expect(result.stdout).toContain(`runner:${bunExecutable}`)
     expect(existsSync(join(root, 'node_modules/.pnpm'))).toBe(false)
