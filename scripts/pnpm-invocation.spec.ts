@@ -84,6 +84,7 @@ describe('pnpm invocation', () => {
   })
 
   it.skipIf(!bunExecutable || process.platform === 'win32')('runs root build:web through Bun without invoking pnpm', () => {
+    if (bunExecutable === undefined) throw new Error('DSH_TEST_BUN_EXECUTABLE is required')
     const root = mkdtempSync(join(tmpdir(), 'dsh-build-web-bun-'))
     onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
     const webDir = join(root, 'apps/web')
