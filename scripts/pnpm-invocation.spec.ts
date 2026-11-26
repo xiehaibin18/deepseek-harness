@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -81,6 +81,34 @@ describe('pnpm invocation', () => {
     const result = spawnSync(invocation.command, invocation.args, { cwd: root, encoding: 'utf8' })
     expect(result.status, result.stdout + result.stderr).toBe(0)
     expect(result.stdout.trim()).toBe('probe-bin:--version')
+  })
+
+  it.skipIf(!bunExecutable || process.platform === 'win32')('runs root build:web through Bun without invoking pnpm', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-build-web-bun-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const webDir = join(root, 'apps/web')
+    mkdirSync(webDir, { recursive: true })
+    const rootManifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
+    const buildWebScript = rootManifest.scripts['build:web']?.replace(
+      'scripts/workspace-run.ts',
+      resolve(repoRoot, 'scripts/workspace-run.ts'),
+    )
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      name: 'root',
+      private: true,
+      workspaces: ['apps/*'],
+      scripts: { 'build:web': buildWebScript },
+    }))
+    writeFileSync(join(webDir, 'package.json'), JSON.stringify({
+      name: '@deepseek-ai/dsh-web-frontend',
+      version: '1.0.0',
+      scripts: { build: 'node -e "console.log(\'runner:\' + process.env.npm_execpath)"' },
+    }))
+
+    const result = spawnSync(bunExecutable, ['run', 'build:web'], { cwd: root, encoding: 'utf8' })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout).toContain(`runner:${bunExecutable}`)
+    expect(existsSync(join(root, 'node_modules/.pnpm'))).toBe(false)
   })
 
   it.each([undefined, ''])('rejects an unavailable lifecycle entrypoint', (entrypoint) => {

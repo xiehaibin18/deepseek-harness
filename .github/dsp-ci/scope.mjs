@@ -50,7 +50,7 @@ export function selectScopes(paths) {
     if (path === 'packages/client/tsdown.client.ts') selected.add('web')
     if (path.startsWith('native/system/') || path.startsWith('packages/typert/') || path.startsWith('.github/dsp-ci/') ||
         path === '.github/workflows/dsp-ci.yml' || /^(?:package\.json|pnpm-workspace\.yaml|bunfig\.toml|tsconfig[^/]*\.json|tsdown\.config\.ts|vitest[^/]*\.ts)$/.test(path) ||
-        /^(?:patches\/|scripts\/(?:build\.ts|compile-referenced-projects\.ts|pnpm-invocation\.ts|generate-typert\.ts|typert-faces\.ts|workspace-package-globs\.ts|client-build-environment\.ts|types\/))/.test(path)) {
+        /^(?:patches\/|scripts\/(?:build\.ts|compile-referenced-projects\.ts|pnpm-invocation\.ts|workspace-run\.ts|dev-web\.ts|generate-typert\.ts|typert-faces\.ts|workspace-package-globs\.ts|client-build-environment\.ts|types\/))/.test(path)) {
       selected.add('ptc')
       selected.add('web')
     }
