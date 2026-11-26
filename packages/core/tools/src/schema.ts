@@ -598,7 +598,9 @@ export function defineTool<const S extends ParameterSchemaSpec, const O extends 
     async execute(args: unknown, exec: ToolRunContext): Promise<JsonValue> {
       const violations = validate(args)
       if (violations.length > 0) throw new ToolArgsError(violations)
-      return userExecute(args as InferArgs<S>, exec) as Promise<JsonValue>
+      // Widen through `unknown` before returning `JsonValue` to avoid TS2321 recursive conditional comparison.
+      const value: unknown = await userExecute(args as InferArgs<S>, exec)
+      return value as JsonValue
     },
   }
   if (userProjectContent) {

@@ -64,7 +64,8 @@ async function mount(ctx: Context, config: Config, id = 'agent') {
     inner = createScope(host, agent).ctx
   }, { inject: ['tools', 'systemPrompt'] }))
   await fiber.await()
-  const row = inner.plugin({ name, inject: [...inject], Config, apply }, config)
+  // oxlint-disable-next-line typescript/no-deprecated -- Exercise the supported compatibility plugin configuration.
+  const row = inner.plugin({ name, inject: [...inject], Config: Config, apply: apply }, config)
   await row.await()
   return { agent, fiber, row }
 }

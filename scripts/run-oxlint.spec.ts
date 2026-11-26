@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveOxlintInvocation } from './run-oxlint.ts'
+import { resolveLintCommand, resolveOxlintInvocation } from './run-oxlint.ts'
 
 describe('Oxlint invocation', () => {
   it('keeps Oxlint\'s own worker default in CI', () => {
@@ -51,5 +51,44 @@ describe('Oxlint invocation', () => {
   it('rejects a competing direct worker bound', () => {
     expect(() => resolveOxlintInvocation(['.', '--threads=2'], { DSH_OXLINT_THREADS: '4' }))
       .toThrow('use DSH_OXLINT_THREADS instead')
+  })
+})
+
+describe('lint backend selection', () => {
+  it('selects bun lint when running under Bun or bun run and translates default format', () => {
+    const invocation = resolveOxlintInvocation(['.'], { CI: 'true', DSH_OXLINT_THREADS: '4' })
+    expect(resolveLintCommand(invocation, { npm_execpath: '/Users/dev/.bun/bin/bun' }, { isBun: false, execPath: '/usr/bin/node' }))
+      .toEqual({
+        backend: 'bun',
+        command: '/Users/dev/.bun/bin/bun',
+        args: ['lint', '--no-script', '.', '--format=pretty', '--threads=4'],
+      })
+    expect(resolveLintCommand(invocation, {}, { isBun: true, execPath: '/Users/dev/.bun/bin/bun' }))
+      .toEqual({
+        backend: 'bun',
+        command: '/Users/dev/.bun/bin/bun',
+        args: ['lint', '--no-script', '.', '--format=pretty', '--threads=4'],
+      })
+  })
+
+  it('keeps oxlint under Node/pnpm or when DSH_LINT_BACKEND=oxlint is set', () => {
+    const invocation = resolveOxlintInvocation(['.'], { DSH_OXLINT_THREADS: '4' })
+    const nodeDefault = resolveLintCommand(invocation, { npm_execpath: '/tools/pnpm.cjs' }, { isBun: false, execPath: '/usr/bin/node' })
+    expect(nodeDefault.backend).toBe('oxlint')
+    expect(nodeDefault.command).toBe('/usr/bin/node')
+    expect(nodeDefault.args.slice(1)).toEqual(['.', '--threads=4'])
+
+    const forcedOxlint = resolveLintCommand(
+      invocation,
+      { DSH_LINT_BACKEND: 'oxlint' },
+      { isBun: true, execPath: '/Users/dev/.bun/bin/bun' },
+    )
+    expect(forcedOxlint.backend).toBe('oxlint')
+  })
+
+  it('rejects an invalid DSH_LINT_BACKEND value', () => {
+    const invocation = resolveOxlintInvocation(['.'], { DSH_OXLINT_THREADS: '4' })
+    expect(() => resolveLintCommand(invocation, { DSH_LINT_BACKEND: 'biome' }))
+      .toThrow('DSH_LINT_BACKEND must be "bun" or "oxlint"')
   })
 })
