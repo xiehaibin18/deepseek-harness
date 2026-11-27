@@ -745,6 +745,34 @@ function groupedDump(
   return lines.join('\n') + '\n'
 }
 
+/** Lazy static module importer used by AOT builds for bundled official plugins. */
+export type StaticPluginImporter = () => Promise<unknown>
+
+/** Observer notified when root Include resolves a plugin via the static registry or disk fallback. */
+export type StaticPluginResolveObserver = (name: string, source: 'static' | 'disk') => void
+
+interface RegisteredStaticPlugins {
+  importers: ReadonlyMap<string, StaticPluginImporter>
+  onResolve?: StaticPluginResolveObserver
+}
+
+let registeredStaticPlugins: RegisteredStaticPlugins | undefined
+
+/**
+ * Register lazy static importers for bundled official plugins so root Include entries
+ * resolve them directly from the compiled binary while external plugins still load from disk.
+ * @param importers - Map of package specifiers to lazy `() => import(...)` thunks, or `undefined` to clear.
+ * @param onResolve - Optional observer called with `'static'` or `'disk'` for non-builtin plugin imports.
+ */
+export function registerStaticPluginImporters(
+  importers: ReadonlyMap<string, StaticPluginImporter> | undefined,
+  onResolve?: StaticPluginResolveObserver,
+): void {
+  registeredStaticPlugins = importers === undefined
+    ? undefined
+    : { importers, ...(onResolve === undefined ? {} : { onResolve }) }
+}
+
 /**
  * Mount and remember the exact root Include entry used by app boot and user patch-layer HMR.
  * @param ctx - context carrying an initialized Loader service.
@@ -764,10 +792,20 @@ export async function mountRootInclude(
   bareModuleBaseUrl?: string,
   binName = 'dsh',
 ): Promise<Entry | undefined> {
-  ctx.loader.builtins.include = bareModuleBaseUrl === undefined
+  const staticPlugins = registeredStaticPlugins
+  ctx.loader.builtins.include = bareModuleBaseUrl === undefined && staticPlugins === undefined
     ? Include
     : class HostResolvedRootInclude extends Include {
       override import(name: string, getOuterStack?: () => string[]): unknown {
+        const staticImporter = staticPlugins?.importers.get(name)
+        if (staticImporter !== undefined) {
+          staticPlugins?.onResolve?.(name, 'static')
+          return staticImporter()
+        }
+        if (staticPlugins !== undefined && !name.startsWith('cordis:')) {
+          staticPlugins.onResolve?.(name, 'disk')
+        }
+        if (bareModuleBaseUrl === undefined) return super.import(name, getOuterStack)
         const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
         if (name.startsWith('.') || name.startsWith('cordis:')) return super.import(specifier, getOuterStack)
         const internal = this.ctx.loader.internal
