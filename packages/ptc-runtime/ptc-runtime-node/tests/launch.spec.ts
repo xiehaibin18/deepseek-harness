@@ -31,7 +31,8 @@ it('resolves the local carrier once while preserving an explicit remote script c
     if (prior === undefined) Reflect.deleteProperty(process, 'pkg')
     else Object.defineProperty(process, 'pkg', prior)
   }
-  expect(resolveLaunch()).toEqual({ kind: 'node-script', executable: process.execPath })
+  const expectedKind = process.versions.bun !== undefined ? 'bun-script' : 'node-script'
+  expect(resolveLaunch()).toEqual({ kind: expectedKind, executable: process.execPath })
 })
 
 it('selects embedded and script bootstrap arguments', () => {

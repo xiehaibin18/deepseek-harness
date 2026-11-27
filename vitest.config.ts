@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import tsconfigPaths from 'vite-tsconfig-paths'
 import { resolvePwshPath } from './packages/shell/pwsh-local/src/resolve.ts'
 import { defineConfig } from 'vitest/config'
-import { standardDecoratorPlugin, vitestExecArgv } from './vitest.shared.ts'
+import { bunVitestTestOptions, standardDecoratorPlugin, vitestExecArgv } from './vitest.shared.ts'
 import { sourceRemotePlugin } from './scripts/vitest-source-remote.ts'
 import { COVERAGE_EXEMPT_ENV, coverageExemptHeavySuites } from './scripts/coverage-exempt.ts'
 import { COVERAGE_PARTITION_MODE_ENV, COVERAGE_TEST_TIMEOUT_ENV, coverageTestTimeoutOptions } from './scripts/coverage-partitions.ts'
@@ -219,6 +219,7 @@ export default defineConfig({
   resolve: { alias: testingAliases },
   test: {
     ...localWorkerBudget,
+    ...bunVitestTestOptions,
     setupFiles: [
       './scripts/test-proxy-environment.ts', './scripts/test-dom-environment.ts', './scripts/test-official-listing-guard.ts',
     ],
@@ -234,6 +235,7 @@ export default defineConfig({
         test: {
           name: 'thread-safe',
           execArgv: vitestExecArgv,
+          ...bunVitestTestOptions,
           // Node 24 has aborted in its CJS lexer (v8::ToLocalChecked Empty
           // MaybeLocal in cjs_lexer::Parse) from worker threads on macOS,
           // Linux, and Windows. Forked workers avoid that shared thread path.
@@ -257,6 +259,7 @@ export default defineConfig({
           name: 'process-bound',
           // Runner import tests require VM modules; the missing-flag test stays in thread-safe.
           execArgv: [...vitestExecArgv, '--experimental-vm-modules'],
+          ...bunVitestTestOptions,
           pool: 'forks',
           ...laneTestBudget,
           setupFiles: [

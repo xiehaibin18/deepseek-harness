@@ -1,6 +1,6 @@
 import tsconfigPaths from 'vite-tsconfig-paths'
 import { defineConfig } from 'vitest/config'
-import { standardDecoratorPlugin, vitestExecArgv } from './vitest.shared.ts'
+import { bunVitestTestOptions, standardDecoratorPlugin, vitestExecArgv } from './vitest.shared.ts'
 
 // Real-API suite, separate because it spends tokens. Each test self-skips without
 // its provider credential for keyless CI; credentialed workflows preflight the
@@ -39,6 +39,7 @@ export default defineConfig({
   plugins: [tsconfigPaths({ projects: ['./tsconfig.base.json'] }), standardDecoratorPlugin()],
   test: {
     execArgv: vitestExecArgv,
+    ...bunVitestTestOptions,
     setupFiles: ['./scripts/test-proxy-environment.ts'],
     // Explicit Node app owners only: apps/web/tests/*.e2e.ts needs the built
     // frontend dist and runs under vitest.web.config.ts (the test:web job).
