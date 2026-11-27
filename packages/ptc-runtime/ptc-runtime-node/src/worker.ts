@@ -314,7 +314,10 @@ export class ProgramWorker {
   }
 
   private exitMessage(outcome: SubprocessOutcome): string {
-    const runtime = this.config.launch.kind === 'bun-script' ? 'Bun' : 'Node'
+    const runtime = this.config.launch.kind === 'bun-script'
+      || (this.config.launch.kind === 'embedded' && process.versions.bun !== undefined)
+      ? 'Bun'
+      : 'Node'
     return this.withControlFailure(`${runtime} process exited (${String(outcome.exitCode)}, signal ${String(outcome.signal)})${this.stderr ? `: ${this.stderr}` : ''}`)
   }
 
@@ -341,7 +344,7 @@ export class ProgramWorker {
       .map(key => [key, undefined]))
     if (packaged) {
       env.DSH_PTC_RUNTIME_NODE = '1'
-      env.NODE_OPTIONS = `${heapFlag} --experimental-vm-modules`
+      if (process.versions.bun === undefined) env.NODE_OPTIONS = `${heapFlag} --experimental-vm-modules`
     }
     const handle = this.ctx.subprocess.spawn({ argv: this.confined?.argv ?? argv, cwd, env, stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', control: 'pipe' }, graceMs: this.config.graceMs })
     this.handle = handle

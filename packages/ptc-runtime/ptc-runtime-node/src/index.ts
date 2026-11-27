@@ -11,7 +11,9 @@ import { createExecution } from './execution.ts'
 import { PolicyProcesses } from './policy-processes.ts'
 import type { Config, ResolvedConfig } from './config.ts'
 export type { Config } from './config.ts'
+export { EMBEDDED_PTC_RUNTIME_SYMBOL, isEmbeddedPtcRuntime } from './launch.ts'
 export type { LaunchConfig } from './launch.ts'
+export { PTC_STRIP_INITIALIZER_ENV } from './type-stripper.ts'
 
 interface LiveRun { controller: AbortController; finished: Promise<void> }
 interface InitializerRegistration {

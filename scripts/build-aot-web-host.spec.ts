@@ -7,6 +7,7 @@ import {
   discoverOfficialPluginSpecifiers,
   indexWorkspaceManifests,
   planStaticPluginEntries,
+  renderAotEntryModule,
   renderBuiltinPluginsModule,
   resolveWorkspaceExportFile,
 } from './build-aot-web-host.ts'
@@ -98,5 +99,16 @@ describe('build-aot-web-host helpers', () => {
     expect(AOT_THIN_WORKSPACE_EXTERNALS).toContain('@deepseek-ai/dsh-llm')
     expect(AOT_THIN_WORKSPACE_EXTERNALS).toContain('@deepseek-ai/dsh-storage')
     expect(AOT_THIN_WORKSPACE_EXTERNALS).not.toContain('@deepseek-ai/dsh-session')
+  })
+
+  it('dispatches embedded PTC worker and initializer stripping modes before CLI boot', () => {
+    const entry = renderAotEntryModule('../../../packages/ptc-runtime/ptc-runtime-node/lib/process.js')
+    const ptcIndex = entry.indexOf("DSH_PTC_RUNTIME_NODE === '1'")
+    const stripIndex = entry.indexOf('DSH_PTC_STRIP_INITIALIZER !== undefined')
+    const cliIndex = entry.indexOf("Symbol.for('dsh.ptc.embeddedRuntime')")
+    expect(ptcIndex).toBeGreaterThan(-1)
+    expect(stripIndex).toBeGreaterThan(ptcIndex)
+    expect(cliIndex).toBeGreaterThan(stripIndex)
+    expect(entry).toContain('await import("../../../packages/ptc-runtime/ptc-runtime-node/lib/process.js")')
   })
 })
