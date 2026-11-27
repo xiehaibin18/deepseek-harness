@@ -1343,6 +1343,9 @@ importers:
       '@types/node':
         specifier: ^26.4.1
         version: 26.4.1
+      node-api-headers:
+        specifier: ^1.9.0
+        version: 1.9.0
       tsx:
         specifier: ^4.23.13
         version: 4.23.13
@@ -27244,6 +27247,9 @@ packages:
     resolution: {integrity: sha512-oSie9nna4k7/4GVGaLdHeHjZZ16KB5OQa0VnQ8vfIl83c0x6swZrmAqMih6RWq/9/7AdYnuuMXriQndymDEyyA==}
     engines: {node: '>=20'}
 
+  node-api-headers@1.9.0:
+    resolution: {integrity: sha512-2oNILP4jXwRB4ywnYKjVk1YyJ96n2D4EOVJO6S3oYZ5PtbJrw3Yt9TpAuX3nBLMuzn74rnfGQrv13pS9vC+YiA==}
+
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
 
@@ -35248,6 +35254,8 @@ snapshots:
       node-addon-require-builtin-win32-arm64-msvc: 0.1.10
       node-addon-require-builtin-win32-ia32-msvc: 0.1.10
       node-addon-require-builtin-win32-x64-msvc: 0.1.10
+
+  node-api-headers@1.9.0: {}
 
   node-api-version@0.2.1:
     dependencies:
