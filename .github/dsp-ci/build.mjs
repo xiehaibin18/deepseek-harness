@@ -18,7 +18,7 @@ function bunRun(args) {
   execFileSync('bun', ['run', ...args], { stdio: 'inherit', env })
 }
 
-bunRun(['build:native-system'])
+execFileSync(process.execPath, ['native/system/scripts/build.ts', '--host-addon-only'], { stdio: 'inherit', env })
 const generator = new WorkspaceTypertGenerator(root, { checkDiagnostics: false, rejectBuildOutputs: true })
 const contributors = generator.discover(['host'], pkg => packages.has(pkg.name) && hasTypertExport(pkg.exports))
 if (contributors.length) writeWorkspaceArtifacts(root, generator.generate(contributors.map(pkg => pkg.package), ['host']))

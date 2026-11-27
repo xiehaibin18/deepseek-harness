@@ -497,6 +497,7 @@
       "devDependencies": {
         "@deepseek-ai/node-addon-system": "workspace:~",
         "@types/node": "^26.4.1",
+        "node-api-headers": "^1.9.0",
         "tsx": "^4.23.13",
         "typescript": "^6.0.3",
       },
@@ -15319,6 +15320,8 @@
     "node-addon-require-builtin-win32-ia32-msvc": ["node-addon-require-builtin-win32-ia32-msvc@0.1.10", "", { "dependencies": { "node-addon-native-custom-loader": "0.1.10" }, "os": "win32", "cpu": "ia32" }, "sha512-ChwIG0HLO7HHmr9NwTYvP9j8qlOpC+kpHmH+qguxdBu+0OMK1DUeneJMIZbBFvSebt1Jk3udkaC2RNzVEt4RVg=="],
 
     "node-addon-require-builtin-win32-x64-msvc": ["node-addon-require-builtin-win32-x64-msvc@0.1.10", "", { "dependencies": { "node-addon-native-custom-loader": "0.1.10" }, "os": "win32", "cpu": "x64" }, "sha512-c1LTohiRnMpra5fT+1ulrvfnYW9OjypVuydPDHGZ+sShUkF2WllRr32FvyqVBp8iUr3oxge8rhqKmHm8XcqItA=="],
+
+    "node-api-headers": ["node-api-headers@1.9.0", "", {}, "sha512-2oNILP4jXwRB4ywnYKjVk1YyJ96n2D4EOVJO6S3oYZ5PtbJrw3Yt9TpAuX3nBLMuzn74rnfGQrv13pS9vC+YiA=="],
 
     "node-api-version": ["node-api-version@0.2.1", "", { "dependencies": { "semver": "7.8.5" } }, "sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q=="],
 
