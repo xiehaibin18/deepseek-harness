@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { availableParallelism } from 'node:os'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defaultParallelism } from './parallelism.ts'
 
@@ -12,6 +12,12 @@ function isFixInvocation(args: readonly string[]): boolean {
   return args.some(arg => FIX_FLAGS.has(arg))
 }
 
+function isBunEntrypoint(entrypoint: string | undefined): boolean {
+  if (entrypoint === undefined || entrypoint === '') return false
+  const name = basename(entrypoint.replaceAll('\\', '/')).toLowerCase()
+  return name === 'bun' || name === 'bun.exe'
+}
+
 function hasOutputFormat(args: readonly string[]): boolean {
   return args.some(arg =>
     arg === '-f'
@@ -20,10 +26,36 @@ function hasOutputFormat(args: readonly string[]): boolean {
     || arg.startsWith('--format='))
 }
 
+function translateArgsForBunLint(args: readonly string[]): string[] {
+  const translated: string[] = ['lint', '--no-script']
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+    if (arg === undefined) continue
+    if (arg === '--format=default' || arg === '-f=default') {
+      translated.push('--format=pretty')
+      continue
+    }
+    if ((arg === '--format' || arg === '-f') && args[index + 1] === 'default') {
+      translated.push(arg, 'pretty')
+      index += 1
+      continue
+    }
+    translated.push(arg)
+  }
+  return translated
+}
+
 /** Complete Oxlint child-process arguments and environment. */
 export interface OxlintInvocation {
   readonly args: readonly string[]
   readonly env: NodeJS.ProcessEnv
+}
+
+/** Resolved lint command selecting either Bun's built-in linter or Node + Oxlint. */
+export interface LintCommand {
+  readonly backend: 'bun' | 'oxlint'
+  readonly command: string
+  readonly args: readonly string[]
 }
 
 /**
@@ -62,6 +94,44 @@ export function resolveOxlintInvocation(
   }
 }
 
+/**
+ * Select the lint executable (`bun lint --no-script` when launched under Bun, or Node + `oxlint` otherwise).
+ * `DSH_LINT_BACKEND` (`bun` or `oxlint`) overrides automatic detection.
+ * @param invocation - Resolved lint arguments and environment from `resolveOxlintInvocation`.
+ * @param env - Caller environment inspected for `DSH_LINT_BACKEND` and `npm_execpath`.
+ * @param runtime - Runtime metadata override for deterministic testing.
+ * @returns The selected lint backend, executable, and CLI arguments.
+ */
+export function resolveLintCommand(
+  invocation: OxlintInvocation,
+  env: NodeJS.ProcessEnv = process.env,
+  runtime: { readonly isBun: boolean; readonly execPath: string } = {
+    isBun: 'bun' in process.versions,
+    execPath: process.execPath,
+  },
+): LintCommand {
+  const backendOverride = env.DSH_LINT_BACKEND
+  if (backendOverride !== undefined && backendOverride !== '' && backendOverride !== 'bun' && backendOverride !== 'oxlint') {
+    throw new Error(`run-oxlint: DSH_LINT_BACKEND must be "bun" or "oxlint", got ${JSON.stringify(backendOverride)}.`)
+  }
+  const bunExecpath = isBunEntrypoint(env.npm_execpath) ? env.npm_execpath : undefined
+  const useBun = backendOverride === 'bun'
+    || (backendOverride !== 'oxlint' && (runtime.isBun || bunExecpath !== undefined))
+  if (useBun) {
+    const command = runtime.isBun ? runtime.execPath : (bunExecpath ?? 'bun')
+    return {
+      backend: 'bun',
+      command,
+      args: translateArgsForBunLint(invocation.args),
+    }
+  }
+  return {
+    backend: 'oxlint',
+    command: runtime.execPath,
+    args: [oxlintCli, ...invocation.args],
+  }
+}
+
 function completeFrom(result: { readonly signal: NodeJS.Signals | null; readonly status: number | null }): void {
   if (result.signal !== null) {
     process.kill(process.pid, result.signal)
@@ -72,8 +142,9 @@ function completeFrom(result: { readonly signal: NodeJS.Signals | null; readonly
 
 function main(): void {
   const invocation = resolveOxlintInvocation(process.argv.slice(2), process.env)
+  const lint = resolveLintCommand(invocation, process.env)
   if (!isFixInvocation(invocation.args)) {
-    const result = spawnSync(process.execPath, [oxlintCli, ...invocation.args], {
+    const result = spawnSync(lint.command, lint.args, {
       env: invocation.env,
       stdio: 'inherit',
     })
@@ -82,7 +153,7 @@ function main(): void {
     return
   }
 
-  const first = spawnSync(process.execPath, [oxlintCli, ...invocation.args], {
+  const first = spawnSync(lint.command, lint.args, {
     encoding: 'utf8',
     env: invocation.env,
     maxBuffer: MAX_CAPTURED_OUTPUT_BYTES,
@@ -100,7 +171,7 @@ function main(): void {
   }
 
   // Overlapping JS-plugin fixes can expose one more fixable diagnostic after the first pass.
-  const second = spawnSync(process.execPath, [oxlintCli, ...invocation.args], {
+  const second = spawnSync(lint.command, lint.args, {
     env: invocation.env,
     stdio: 'inherit',
   })

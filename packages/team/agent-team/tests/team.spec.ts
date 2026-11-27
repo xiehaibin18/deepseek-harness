@@ -327,7 +327,7 @@ describe('Tree-owned task boards', () => {
     const task = await ctx.agentTeams.createTask(grandchild, { subject: 'still active', description: 'creator offline' })
     expect(ctx.agentTeams.listTasks(lead).map(row => row.id)).toContain(task.id)
 
-    const impostor = { ...lead } as Agent
+    const impostor: Agent = { ...lead }
     expect(() => ctx.agentTeams.listTasks(impostor)).toThrow(expect.objectContaining({ code: 'UNAUTHORIZED' }))
 
     await ctx.subagents.drainDescendants([lead])

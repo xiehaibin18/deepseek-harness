@@ -152,7 +152,7 @@ describe.each(launches)('$runtime PTC worker', ({ launch }) => {
     it('preserves retained variables when an abort lands during a pending binding call', async () => {
       const { runtime, owner } = await setup('read-only', repl)
       const blocked = Promise.withResolvers<null>()
-      onTestFinished(() => blocked.resolve(null))
+      onTestFinished(() => { blocked.resolve(null) })
       const entered = Promise.withResolvers<undefined>()
       const controller = new AbortController()
       const bindings = [{ global: 'tools', functions: { block: () => { entered.resolve(undefined); return blocked.promise } } }]
