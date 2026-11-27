@@ -3,6 +3,10 @@ import { spawnSync } from 'node:child_process'
 import * as nodeModule from 'node:module'
 import { Worker } from 'node:worker_threads'
 import { quietRuntimeCall } from './environment.ts'
+import { isEmbeddedPtcRuntime } from './launch.ts'
+
+/** Private env variable telling an embedded AOT executable to strip TypeScript from stdin using `amaro`. */
+export const PTC_STRIP_INITIALIZER_ENV = 'DSH_PTC_STRIP_INITIALIZER' as const
 
 interface TypeStripper {
   strip(program: string, signal: AbortSignal): string | Promise<string>
@@ -120,9 +124,12 @@ class BunStripper implements TypeStripper {
 
   stripInitializer(program: string): string {
     // Registration reports syntax errors synchronously. The helper can be killed even while this thread waits.
-    const result = spawnSync(process.execPath, [
-      '--config=/dev/null', '--tsconfig-override=/dev/null', '--no-env-file', '--no-install', '-e',
-      AMARO_SOURCE + `
+    const embedded = isEmbeddedPtcRuntime()
+    const args = embedded
+      ? []
+      : [
+        '--config=/dev/null', '--tsconfig-override=/dev/null', '--no-env-file', '--no-install', '-e',
+        AMARO_SOURCE + `
 const { readFileSync } = require('node:fs')
 const { transformSync } = require(${JSON.stringify(this.amaroPath)})
 const result = parse(readFileSync(0, 'utf8'), transformSync)
@@ -131,8 +138,11 @@ if ('error' in result) {
   process.exitCode = 2
 } else process.stdout.write(result.code)
 `,
-    ], {
-      input: program, encoding: 'utf8', env: {}, timeout: this.maxTimeoutMs, killSignal: 'SIGKILL',
+      ]
+    const result = spawnSync(process.execPath, args, {
+      input: program, encoding: 'utf8',
+      env: embedded ? { [PTC_STRIP_INITIALIZER_ENV]: this.amaroPath } : {},
+      timeout: this.maxTimeoutMs, killSignal: 'SIGKILL',
       maxBuffer: Buffer.byteLength(program) + this.maxOutputBytes,
     })
     if (result.error) {

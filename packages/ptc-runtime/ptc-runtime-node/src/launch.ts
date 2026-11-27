@@ -36,13 +36,24 @@ export function resolveLaunch(config?: LaunchConfig): LaunchConfig {
   return launch
 }
 
+/** Global symbol set by compiled Bun AOT executables to select embedded PTC workers. */
+export const EMBEDDED_PTC_RUNTIME_SYMBOL = Symbol.for('dsh.ptc.embeddedRuntime')
+
+/**
+ * Report whether the current process is a compiled single-executable carrier (Node SEA/pkg or Bun AOT).
+ * @returns `true` when worker subprocesses must launch via the embedded executable mode.
+ */
+export function isEmbeddedPtcRuntime(): boolean {
+  return 'pkg' in process || Reflect.get(globalThis, EMBEDDED_PTC_RUNTIME_SYMBOL) === true
+}
+
 /**
  * Name the worker an omitted `launch` selects: the embedded worker of a packaged executable, else a script worker
  * started with the runtime that runs this Host.
  * @returns The worker invocation for this Host's own runtime.
  */
 function defaultLaunch(): LaunchConfig {
-  if ('pkg' in process) return { kind: 'embedded', executable: process.execPath }
+  if (isEmbeddedPtcRuntime()) return { kind: 'embedded', executable: process.execPath }
   return { kind: process.versions.bun === undefined ? 'node-script' : 'bun-script', executable: process.execPath }
 }
 

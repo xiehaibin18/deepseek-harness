@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { bootstrapArgs, resolveLaunch } from '../src/launch.ts'
+import { bootstrapArgs, EMBEDDED_PTC_RUNTIME_SYMBOL, isEmbeddedPtcRuntime, resolveLaunch } from '../src/launch.ts'
 
 const unmapped = { processPathFromHostPath: () => undefined }
 const noMapping = { processPathFromHostPath: () => { throw new Error('must not map a remote worker') } }
@@ -33,6 +33,20 @@ it('resolves the local carrier once while preserving an explicit remote script c
   }
   const expectedKind = process.versions.bun !== undefined ? 'bun-script' : 'node-script'
   expect(resolveLaunch()).toEqual({ kind: expectedKind, executable: process.execPath })
+})
+
+it('selects the embedded carrier when the Bun AOT runtime symbol is set', () => {
+  const prior: unknown = Reflect.get(globalThis, EMBEDDED_PTC_RUNTIME_SYMBOL)
+  try {
+    Reflect.set(globalThis, EMBEDDED_PTC_RUNTIME_SYMBOL, true)
+    expect(isEmbeddedPtcRuntime()).toBe(true)
+    expect(resolveLaunch()).toEqual({ kind: 'embedded', executable: process.execPath })
+    expect(bootstrapArgs(noMapping, resolveLaunch(), 2048)).toEqual(['2048'])
+  } finally {
+    if (prior === undefined) Reflect.deleteProperty(globalThis, EMBEDDED_PTC_RUNTIME_SYMBOL)
+    else Reflect.set(globalThis, EMBEDDED_PTC_RUNTIME_SYMBOL, prior)
+  }
+  expect(isEmbeddedPtcRuntime()).toBe(false)
 })
 
 it('selects embedded and script bootstrap arguments', () => {

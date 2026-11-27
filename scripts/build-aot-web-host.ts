@@ -254,6 +254,47 @@ export function renderBuiltinPluginsModule(entries: readonly StaticPluginEntry[]
   ].join('\n')
 }
 
+/**
+ * Render the AOT entrypoint dispatching embedded PTC worker modes before CLI boot.
+ * @param ptcProcessImportPath - Relative path from staging dir to `ptc-runtime-node/lib/process.js`.
+ * @returns TypeScript source text ending with a trailing newline.
+ */
+export function renderAotEntryModule(ptcProcessImportPath: string): string {
+  return [
+    "import { readFileSync } from 'node:fs'",
+    "import { createRequire } from 'node:module'",
+    '',
+    "if (process.env.DSH_PTC_RUNTIME_NODE === '1') {",
+    "  Reflect.deleteProperty(process.env, 'DSH_PTC_RUNTIME_NODE')",
+    `  await import(${JSON.stringify(ptcProcessImportPath)})`,
+    '} else if (process.env.DSH_PTC_STRIP_INITIALIZER !== undefined) {',
+    '  const amaroPath = process.env.DSH_PTC_STRIP_INITIALIZER',
+    "  Reflect.deleteProperty(process.env, 'DSH_PTC_STRIP_INITIALIZER')",
+    '  const require = createRequire(import.meta.url)',
+    '  const { transformSync } = require(amaroPath) as { transformSync(code: string): { code: string } }',
+    '  try {',
+    "    process.stdout.write(transformSync(readFileSync(0, 'utf8')).code)",
+    '  } catch (error) {',
+    "    const message = typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string' ? error.message : String(error)",
+    '    process.stderr.write(message)',
+    '    process.exitCode = 2',
+    '  }',
+    '} else {',
+    "  Reflect.set(globalThis, Symbol.for('dsh.ptc.embeddedRuntime'), true)",
+    "  const { registerStaticPluginImporters } = await import('@deepseek-ai/dsh-app-boot')",
+    "  const { runCli } = await import('../lib/bin.js')",
+    "  const { BUILTIN_PLUGINS } = await import('./builtin-plugins.generated.ts')",
+    "  const trace = process.env.DSH_AOT_TRACE === '1'",
+    '  registerStaticPluginImporters(',
+    '    BUILTIN_PLUGINS,',
+    '    trace ? (name, source) => { process.stderr.write(`[aot-plugin:${source}] ${name}\\n`) } : undefined,',
+    '  )',
+    '  await runCli()',
+    '}',
+    '',
+  ].join('\n')
+}
+
 /** Options for {@link buildAotWebHost}. */
 export interface BuildAotWebHostOptions {
   /** Repository root containing built `lib/` artifacts. */
@@ -294,22 +335,17 @@ export function buildAotWebHost(options: BuildAotWebHostOptions = {}): {
       )
     }
 
+    const ptcProcessFile = join(repoRoot, 'packages/ptc-runtime/ptc-runtime-node/lib/process.js')
+    if (!existsSync(ptcProcessFile)) {
+      throw new Error(`build-aot-web-host: built PTC worker entry missing at ${ptcProcessFile}; run build:artifacts first`)
+    }
+    const ptcProcessRel = relative(stagingDir, ptcProcessFile).replaceAll('\\', '/')
+    const ptcProcessImportPath = ptcProcessRel.startsWith('.') ? ptcProcessRel : `./${ptcProcessRel}`
+
     const tsconfigOverride = join(stagingDir, 'tsconfig.aot.json')
     writeFileSync(tsconfigOverride, '{}\n')
     writeFileSync(join(stagingDir, 'builtin-plugins.generated.ts'), renderBuiltinPluginsModule(plan.entries))
-    writeFileSync(join(stagingDir, 'entry.ts'), [
-      "import { registerStaticPluginImporters } from '@deepseek-ai/dsh-app-boot'",
-      "import { runCli } from '../lib/bin.js'",
-      "import { BUILTIN_PLUGINS } from './builtin-plugins.generated.ts'",
-      '',
-      'const trace = process.env.DSH_AOT_TRACE === "1"',
-      'registerStaticPluginImporters(',
-      '  BUILTIN_PLUGINS,',
-      '  trace ? (name, source) => { process.stderr.write(`[aot-plugin:${source}] ${name}\\n`) } : undefined,',
-      ')',
-      'await runCli()',
-      '',
-    ].join('\n'))
+    writeFileSync(join(stagingDir, 'entry.ts'), renderAotEntryModule(ptcProcessImportPath))
 
     const externalArgs: string[] = []
     for (const pkg of [...AOT_THIN_WORKSPACE_EXTERNALS, ...AOT_EXTRA_EXTERNALS]) {
@@ -323,6 +359,8 @@ export function buildAotWebHost(options: BuildAotWebHostOptions = {}): {
       '--aot',
       '--compile-in-place',
       '--aot-allow-code-from-disk',
+      '--no-compile-autoload-dotenv',
+      '--no-compile-autoload-bunfig',
       '--target=bun',
       '--tsconfig-override', tsconfigOverride,
       ...externalArgs,
