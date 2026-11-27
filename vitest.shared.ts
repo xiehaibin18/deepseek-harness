@@ -9,6 +9,17 @@ const decoratorSyntax = /^\s*@[A-Za-z_$][\w$]*/m
 export const vitestExecArgv = process.allowedNodeEnvironmentFlags.has('--webstorage') ? ['--no-webstorage'] : []
 
 /**
+ * Bun-only Vitest test options. Under Bun, ESM namespace objects report
+ * `"__esModule" in ns === true`, causing Vitest's external-module CJS interop
+ * to unwrap `zod`'s `export { z, z as default }` to `external.js` and lose the
+ * named `z` export. Inlining `zod` avoids that external interop path while
+ * leaving Node execution unchanged.
+ */
+export const bunVitestTestOptions = process.versions.bun !== undefined
+  ? { server: { deps: { inline: ['zod'] } } }
+  : {}
+
+/**
  * Transform standard TypeScript decorators before Vite's default parser sees source files.
  * @returns a pre-transform Vite plugin shared by source-mode test configurations.
  */
